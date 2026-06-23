@@ -1,0 +1,13 @@
+package com.cloudcad.common.exception;
+
+public enum ErrorCode {
+    VALIDATION_ERROR,
+    UNAUTHORIZED,
+    FORBIDDEN,
+    RESOURCE_NOT_FOUND,
+    CONFLICT,
+    INTERNAL_ERROR,
+    DOCUMENT_VERSION_CONFLICT,
+    INVALID_CAD_SNAPSHOT,
+    INVALID_OPERATION_TYPE
+}

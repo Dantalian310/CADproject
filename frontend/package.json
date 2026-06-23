@@ -1,0 +1,33 @@
+{
+  "name": "cloud-cad-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:lan": "vite --host 0.0.0.0",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
+    "@stomp/stompjs": "^7.0.0",
+    "axios": "^1.7.9",
+    "element-plus": "^2.8.8",
+    "pinia": "^2.2.6",
+    "three": "^0.171.0",
+    "three-bvh-csg": "^0.0.17",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.171.0",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vue-tsc": "^2.2.0",
+    "ws": "^8.21.0"
+  }
+}

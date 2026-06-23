@@ -1,0 +1,18 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: cloudcad-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cloudcad
+      POSTGRES_USER: cloudcad
+      POSTGRES_PASSWORD: cloudcad_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./.docker-data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloudcad -d cloudcad"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

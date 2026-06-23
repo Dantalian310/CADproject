@@ -1,0 +1,97 @@
+.workspace {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) 30px;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #eef2f7;
+}
+
+.workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #d8dee9;
+  background: #fff;
+}
+
+.workspace-title,
+.workspace-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-body {
+  display: grid;
+  grid-template-columns: auto minmax(360px, 1fr) auto;
+  min-height: 0;
+}
+
+.workspace-panel {
+  width: 260px;
+  min-width: 180px;
+  max-width: 460px;
+  min-height: 0;
+  overflow: auto;
+  resize: horizontal;
+  border-right: 1px solid #d8dee9;
+  background: #fff;
+}
+
+.workspace-panel.right {
+  width: 320px;
+  min-width: 220px;
+  max-width: 520px;
+  border-right: 0;
+  border-left: 1px solid #d8dee9;
+}
+
+.toolbar-shell {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px 12px;
+  overflow: visible;
+  border-bottom: 1px solid #d8dee9;
+  background: #fff;
+}
+
+.toolbar-group {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding-right: 10px;
+  border-right: 1px solid #e5e7eb;
+}
+
+.viewport-shell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #e7ebf0;
+}
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 12px;
+  border-top: 1px solid #d8dee9;
+  background: #fff;
+  color: #4b5563;
+  font-size: 12px;
+}
