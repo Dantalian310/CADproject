@@ -59,6 +59,7 @@ export interface DocumentDTO {
   id: number
   projectId: number
   name: string
+  description?: string
   currentVersion: number
   snapshotJson: CadDocument
   createdAt?: string
@@ -99,6 +100,12 @@ export interface UpdateMemberRoleRequest {
 
 export interface CreateDocumentRequest {
   name: string
+  description?: string
+}
+
+export interface UpdateDocumentRequest {
+  name: string
+  description?: string
 }
 
 export interface SaveDocumentRequest {

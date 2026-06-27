@@ -119,8 +119,8 @@
         <el-descriptions :column="1" size="small" border>
           <template v-if="selectedFeatureItems.length > 1">
             <el-descriptions-item label="三维特征">{{ selectedFeatureItems.length }} 个</el-descriptions-item>
-            <el-descriptions-item label="可用操作">移动、Union、Difference、Cut、删除</el-descriptions-item>
-            <el-descriptions-item label="布尔顺序">第一个选中对象为目标，第二个选中对象为刀具</el-descriptions-item>
+            <el-descriptions-item label="可用操作">移动、布尔加、布尔减、删除</el-descriptions-item>
+            <el-descriptions-item label="布尔顺序">第一个选中对象为目标，第二个选中对象为工具实体</el-descriptions-item>
           </template>
           <template v-else>
             <el-descriptions-item label="草图实体">{{ cadStore.selectionCount }} 个</el-descriptions-item>
@@ -149,15 +149,27 @@
           <el-form-item label="抑制">
             <el-switch :model-value="cadStore.selectedFeature.suppressed" @change="updateFeatureSuppressed" />
           </el-form-item>
-          <template v-if="isPrimitiveFeature(cadStore.selectedFeature)">
+          <el-form-item v-if="isTransformableFeature(cadStore.selectedFeature)" label="固定">
+            <el-switch :model-value="Boolean(cadStore.selectedFeature.locked)" @change="updateFeatureLocked" />
+          </el-form-item>
+          <template v-if="isTransformableFeature(cadStore.selectedFeature)">
             <el-form-item label="位置 X">
-              <el-input-number :model-value="cadStore.selectedFeature.position.x" :step="10" @change="updateFeaturePosition('x', $event)" />
+              <el-input-number :model-value="cadStore.selectedFeature.position?.x ?? 0" :step="10" @change="updateFeaturePosition('x', $event)" />
             </el-form-item>
             <el-form-item label="位置 Y">
-              <el-input-number :model-value="cadStore.selectedFeature.position.y" :step="10" @change="updateFeaturePosition('y', $event)" />
+              <el-input-number :model-value="cadStore.selectedFeature.position?.y ?? 0" :step="10" @change="updateFeaturePosition('y', $event)" />
             </el-form-item>
             <el-form-item label="位置 Z">
-              <el-input-number :model-value="cadStore.selectedFeature.position.z" :min="0" :step="10" @change="updateFeaturePosition('z', $event)" />
+              <el-input-number :model-value="cadStore.selectedFeature.position?.z ?? 0" :step="10" @change="updateFeaturePosition('z', $event)" />
+            </el-form-item>
+            <el-form-item label="旋转 X">
+              <el-input-number :model-value="cadStore.selectedFeature.rotation?.x ?? 0" :min="-360" :max="360" :step="15" @change="updateFeatureRotation('x', $event)" />
+            </el-form-item>
+            <el-form-item label="旋转 Y">
+              <el-input-number :model-value="cadStore.selectedFeature.rotation?.y ?? 0" :min="-360" :max="360" :step="15" @change="updateFeatureRotation('y', $event)" />
+            </el-form-item>
+            <el-form-item label="旋转 Z">
+              <el-input-number :model-value="cadStore.selectedFeature.rotation?.z ?? 0" :min="-360" :max="360" :step="15" @change="updateFeatureRotation('z', $event)" />
             </el-form-item>
           </template>
           <template v-if="cadStore.selectedFeature.type === 'box'">
@@ -186,9 +198,13 @@
             <el-input-number :model-value="cadStore.selectedFeature.depth" :min="1" :step="5" @change="updateFeatureDepth" />
           </el-form-item>
           <el-form-item v-if="cadStore.selectedFeature.type === 'boolean'" label="布尔方式">
-            <el-select :model-value="cadStore.selectedFeature.operation" @change="updateBooleanOperation">
-              <el-option label="Union" value="union" />
-              <el-option label="Difference" value="difference" />
+            <el-select
+              :model-value="booleanOperationValue(cadStore.selectedFeature.operation)"
+              :disabled="Boolean(cadStore.selectedFeature.resultMesh)"
+              @change="updateBooleanOperation"
+            >
+              <el-option label="布尔加" value="add" />
+              <el-option label="布尔减" value="subtract" />
             </el-select>
           </el-form-item>
         </el-form>
@@ -373,18 +389,45 @@ function updateFeatureSuppressed(value: string | number | boolean) {
   cadStore.updateSelectedFeature({ ...cloneFeature(feature), suppressed: Boolean(value) })
 }
 
-function isPrimitiveFeature(feature: Feature): feature is BoxFeature | SphereFeature | ConeFeature {
-  return feature.type === 'box' || feature.type === 'sphere' || feature.type === 'cone'
+function updateFeatureLocked(value: string | number | boolean) {
+  const feature = cadStore.selectedFeature
+  if (!feature || !isTransformableFeature(feature)) return
+  cadStore.updateSelectedFeature({ ...cloneFeature(feature), locked: Boolean(value) || undefined })
+}
+
+function isTransformableFeature(feature: Feature): boolean {
+  return feature.type === 'box'
+    || feature.type === 'sphere'
+    || feature.type === 'cone'
+    || feature.type === 'extrude'
+    || feature.type === 'cut'
+    || feature.type === 'boolean'
+    || feature.type === 'mesh'
 }
 
 function updateFeaturePosition(axis: 'x' | 'y' | 'z', value: number | undefined) {
   const feature = cadStore.selectedFeature
-  if (typeof value !== 'number' || !Number.isFinite(value) || !feature || !isPrimitiveFeature(feature)) return
+  if (typeof value !== 'number' || !Number.isFinite(value) || !feature || !isTransformableFeature(feature)) return
+  const position = feature.position ?? { x: 0, y: 0, z: 0 }
   cadStore.updateSelectedFeature({
     ...cloneFeature(feature),
     position: {
-      ...feature.position,
-      [axis]: axis === 'z' ? Math.max(0, value) : value
+      ...position,
+      [axis]: value
+    }
+  })
+}
+
+function updateFeatureRotation(axis: 'x' | 'y' | 'z', value: number | undefined) {
+  const feature = cadStore.selectedFeature
+  if (typeof value !== 'number' || !Number.isFinite(value) || !feature || !isTransformableFeature(feature)) return
+  cadStore.updateSelectedFeature({
+    ...cloneFeature(feature),
+    rotation: {
+      x: feature.rotation?.x ?? 0,
+      y: feature.rotation?.y ?? 0,
+      z: feature.rotation?.z ?? 0,
+      [axis]: value
     }
   })
 }
@@ -423,9 +466,14 @@ function updateFeatureDepth(value: number | undefined) {
   }
 }
 
-function updateBooleanOperation(value: 'union' | 'difference') {
+function booleanOperationValue(value: string): 'add' | 'subtract' {
+  return value === 'union' || value === 'add' ? 'add' : 'subtract'
+}
+
+function updateBooleanOperation(value: 'add' | 'subtract') {
   const feature = cadStore.selectedFeature
   if (!feature || feature.type !== 'boolean') return
+  if (feature.resultMesh?.vertices.length) return
   cadStore.updateSelectedFeature({ ...cloneFeature(feature), operation: value } as BooleanFeature)
 }
 

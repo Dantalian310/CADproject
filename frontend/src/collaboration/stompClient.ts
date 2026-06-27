@@ -15,7 +15,7 @@ export class CadStompClient {
   connect(token: string): Promise<void> {
     return new Promise((resolve, reject) => {
       this.client = new Client({
-        brokerURL: import.meta.env.VITE_WS_URL ?? 'ws://localhost:8080/ws',
+        brokerURL: resolveWebSocketUrl(),
         connectHeaders: {
           Authorization: `Bearer ${token}`
         },
@@ -85,4 +85,11 @@ export class CadStompClient {
       throw new Error('STOMP client has not been connected')
     }
   }
+}
+
+function resolveWebSocketUrl(): string {
+  const configuredUrl = import.meta.env.VITE_WS_URL
+  if (configuredUrl) return configuredUrl
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}/ws`
 }

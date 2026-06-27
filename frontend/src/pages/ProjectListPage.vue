@@ -32,6 +32,46 @@
       </section>
 
       <div class="section-title">
+        <h1>模型文件</h1>
+        <div class="section-actions">
+          <el-button :loading="projectStore.loading" @click="openImportDialog">上传模型文件</el-button>
+          <el-button @click="loadDocuments">刷新</el-button>
+        </div>
+      </div>
+
+      <el-table
+        v-if="documents.length > 0"
+        v-loading="documentsLoading"
+        :data="documents"
+        class="document-table"
+        size="small"
+      >
+        <el-table-column prop="name" label="文件名" min-width="160" />
+        <el-table-column label="所属项目" min-width="140">
+          <template #default="{ row }">
+            {{ projectNameById.get(row.projectId) || `Project ${row.projectId}` }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="description" label="介绍" min-width="220" show-overflow-tooltip />
+        <el-table-column label="版本" width="90">
+          <template #default="{ row }">v{{ row.currentVersion }}</template>
+        </el-table-column>
+        <el-table-column label="更新时间" min-width="160">
+          <template #default="{ row }">{{ formatTime(row.updatedAt) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="240" fixed="right">
+          <template #default="{ row }">
+            <div class="table-actions">
+              <el-button size="small" type="primary" @click="openDocument(row)">打开</el-button>
+              <el-button size="small" @click="openDocumentEdit(row)">编辑</el-button>
+              <el-button size="small" @click="downloadDocument(row)">下载</el-button>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else-if="!documentsLoading" description="暂无模型文件" :image-size="64" />
+
+      <div class="section-title project-section-title">
         <h1>项目</h1>
         <el-button type="primary" @click="createVisible = true">新建项目</el-button>
       </div>
@@ -64,16 +104,63 @@
       :project-id="memberProjectId"
       :can-manage="memberCanManage"
     />
+    <el-dialog v-model="documentEditVisible" title="编辑模型文件" width="420px" append-to-body>
+      <el-form label-position="top" size="small">
+        <el-form-item label="文件名">
+          <el-input v-model="documentForm.name" maxlength="128" />
+        </el-form-item>
+        <el-form-item label="内容介绍">
+          <el-input v-model="documentForm.description" type="textarea" :rows="4" maxlength="1000" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="documentEditVisible = false">取消</el-button>
+        <el-button size="small" type="primary" @click="saveDocumentMetadata">保存</el-button>
+      </template>
+    </el-dialog>
+    <el-dialog v-model="documentImportVisible" title="上传模型文件" width="460px" append-to-body>
+      <el-form label-position="top" size="small">
+        <el-form-item label="模型项目">
+          <p class="form-tip">
+            上传后会自动创建一个独立项目；每个模型文件对应一个项目，删除项目只会删除该项目内的模型。
+          </p>
+        </el-form-item>
+        <el-form-item label="本地模型文件">
+          <input
+            ref="documentImportInput"
+            type="file"
+            accept=".cloudcad,.json,.stl,.gltf,.glb,.step,.stp,.dwg,application/json,model/stl,model/gltf+json,model/gltf-binary"
+            @change="handleImportFileChange"
+          />
+          <p class="form-tip">支持 .cloudcad、旧版 .json、STL、glTF/GLB；STEP/DWG 当前会提示转换方案。</p>
+        </el-form-item>
+        <el-form-item label="导入后文件名">
+          <el-input v-model="documentImportForm.name" maxlength="128" placeholder="默认使用文件内名称或本地文件名" />
+        </el-form-item>
+        <el-form-item label="内容介绍">
+          <el-input v-model="documentImportForm.description" type="textarea" :rows="3" maxlength="1000" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="documentImportVisible = false">取消</el-button>
+        <el-button size="small" type="primary" :loading="documentImporting" @click="importDocumentFile">
+          上传并打开
+        </el-button>
+      </template>
+    </el-dialog>
   </main>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth.store'
 import { useProjectStore } from '@/stores/project.store'
-import type { ProjectDTO } from '@/api/types'
+import type { DocumentDTO, ProjectDTO } from '@/api/types'
+import type { CadDocument } from '@/cad/model/document'
+import { createDocument, exportDocumentJson, listDocuments, saveDocument, updateDocument } from '@/api/document.api'
+import { createCloudCadPackage, loadCadDocumentFromFile } from '@/cad/io/cadFileExchange'
 import CreateProjectDialog from '@/components/dialogs/CreateProjectDialog.vue'
 import EditProjectDialog from '@/components/dialogs/EditProjectDialog.vue'
 import ProjectMemberDialog from '@/components/dialogs/ProjectMemberDialog.vue'
@@ -87,15 +174,51 @@ const editingProject = ref<ProjectDTO | null>(null)
 const memberVisible = ref(false)
 const memberProjectId = ref<number | null>(null)
 const memberCanManage = ref(false)
+const documents = ref<DocumentDTO[]>([])
+const documentsLoading = ref(false)
+const documentEditVisible = ref(false)
+const editingDocument = ref<DocumentDTO | null>(null)
+const documentForm = reactive({
+  name: '',
+  description: ''
+})
+const documentImportVisible = ref(false)
+const documentImportInput = ref<HTMLInputElement | null>(null)
+const documentImporting = ref(false)
+const documentImportForm = reactive({
+  name: '',
+  description: '',
+  file: null as File | null
+})
+const projectNameById = computed(() => new Map(projectStore.projects.map((project) => [project.id, project.name])))
 
 onMounted(() => {
-  void projectStore.loadProjects()
+  void loadDashboard()
   void projectStore.loadPendingInvitations()
 })
+
+async function loadDashboard() {
+  await projectStore.loadProjects()
+  await loadDocuments()
+}
+
+async function loadDocuments() {
+  documentsLoading.value = true
+  try {
+    const results = await Promise.all(projectStore.projects.map((project) => listDocuments(project.id)))
+    documents.value = results.flat().sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+  } finally {
+    documentsLoading.value = false
+  }
+}
 
 async function openWorkspace(project: ProjectDTO) {
   if (!project.defaultDocumentId) return
   await router.push(`/workspace/${project.id}/${project.defaultDocumentId}`)
+}
+
+async function openDocument(document: DocumentDTO) {
+  await router.push(`/workspace/${document.projectId}/${document.id}`)
 }
 
 function openMembers(project: ProjectDTO) {
@@ -110,7 +233,7 @@ function openEdit(project: ProjectDTO) {
 }
 
 function handleCreated() {
-  void projectStore.loadProjects()
+  void loadDashboard()
 }
 
 function handleUpdated() {
@@ -130,6 +253,7 @@ async function confirmDelete(project: ProjectDTO) {
       }
     )
     await projectStore.deleteProject(project.id)
+    documents.value = documents.value.filter((document) => document.projectId !== project.id)
     ElMessage.success('项目已删除')
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') {
@@ -141,6 +265,163 @@ async function confirmDelete(project: ProjectDTO) {
 async function logout() {
   authStore.logout()
   await router.push('/login')
+}
+
+function openDocumentEdit(document: DocumentDTO) {
+  editingDocument.value = document
+  documentForm.name = document.name
+  documentForm.description = document.description || ''
+  documentEditVisible.value = true
+}
+
+async function saveDocumentMetadata() {
+  const document = editingDocument.value
+  if (!document) return
+  const updated = await updateDocument(document.id, {
+    name: documentForm.name.trim() || document.name,
+    description: documentForm.description.trim() || undefined
+  })
+  documents.value = documents.value.map((item) => (item.id === updated.id ? updated : item))
+  documentEditVisible.value = false
+  ElMessage.success('模型文件已更新')
+}
+
+async function downloadDocument(document: DocumentDTO) {
+  const blob = await exportDocumentJson(document.id)
+  const snapshot = JSON.parse(await blob.text()) as CadDocument
+  const cloudCadBlob = new Blob([JSON.stringify(createCloudCadPackage(snapshot), null, 2)], {
+    type: 'application/vnd.cloudcad+json;charset=utf-8'
+  })
+  const url = URL.createObjectURL(cloudCadBlob)
+  const link = window.document.createElement('a')
+  link.href = url
+  link.download = `${document.name || 'cad-document'}.cloudcad`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+function openImportDialog() {
+  documentImportForm.name = ''
+  documentImportForm.description = ''
+  documentImportForm.file = null
+  if (documentImportInput.value) documentImportInput.value.value = ''
+  documentImportVisible.value = true
+}
+
+function handleImportFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] ?? null
+  documentImportForm.file = file
+  if (file && !documentImportForm.name.trim()) {
+    documentImportForm.name = file.name.replace(/\.[^.]+$/i, '')
+  }
+}
+
+async function importDocumentFile() {
+  if (!documentImportForm.file) {
+    ElMessage.warning('请先选择本地模型文件')
+    return
+  }
+  documentImporting.value = true
+  try {
+    const imported = await loadCadDocumentFromFile(documentImportForm.file)
+    const snapshot = normalizeImportedSnapshot(imported.document)
+    const name = documentImportForm.name.trim() || imported.suggestedName || snapshot.name
+    const description = documentImportForm.description.trim() || undefined
+    const project = await createImportProject(name, description)
+    const targetDocument = await prepareImportDocument(project.id, name, description)
+    const importedSnapshot: CadDocument = {
+      ...snapshot,
+      documentId: String(targetDocument.id),
+      name,
+      metadata: {
+        ...snapshot.metadata,
+        currentVersion: targetDocument.currentVersion
+      }
+    }
+    const saved = await saveDocument(targetDocument.id, {
+      baseVersion: targetDocument.currentVersion,
+      snapshotJson: importedSnapshot,
+      message: `import ${imported.sourceFormat} model file`
+    })
+    documents.value = [saved, ...documents.value.filter((item) => item.id !== saved.id)]
+      .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+    documentImportVisible.value = false
+    ElMessage.success('已创建独立模型项目并上传文件')
+    await router.push(`/workspace/${saved.projectId}/${saved.id}`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '上传模型文件失败')
+  } finally {
+    documentImporting.value = false
+  }
+}
+
+async function prepareImportDocument(projectId: number, name: string, description?: string): Promise<DocumentDTO> {
+  const reusable = await findReusableImportDocument(projectId)
+  if (reusable) {
+    return updateDocument(reusable.id, { name, description })
+  }
+  return createDocument(projectId, { name, description })
+}
+
+async function createImportProject(name: string, description?: string): Promise<ProjectDTO> {
+  const projectName = makeUniqueProjectName(name || '导入模型')
+  return projectStore.createProject({
+    name: projectName,
+    description: description || '由上传模型文件自动创建的独立项目'
+  })
+}
+
+async function findReusableImportDocument(projectId: number): Promise<DocumentDTO | null> {
+  const projectDocuments = await listDocuments(projectId)
+  return projectDocuments.find((document) => isReusableEmptyDocument(document)) ?? null
+}
+
+function isReusableEmptyDocument(document: DocumentDTO): boolean {
+  const snapshot = document.snapshotJson
+  const hasNoFeatures = Array.isArray(snapshot.features) && snapshot.features.length === 0
+  const hasNoSketchGeometry = Array.isArray(snapshot.sketches)
+    && snapshot.sketches.every((sketch) => !Array.isArray(sketch.entities) || sketch.entities.length === 0)
+  return document.name === 'Demo Part'
+    && document.currentVersion <= 1
+    && hasNoFeatures
+    && hasNoSketchGeometry
+}
+
+function makeUniqueProjectName(baseName: string): string {
+  const normalizedBase = baseName.trim() || '导入模型'
+  const existingNames = new Set(projectStore.projects.map((project) => project.name))
+  if (!existingNames.has(normalizedBase)) return normalizedBase
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${normalizedBase} (${index})`
+    if (!existingNames.has(candidate)) return candidate
+  }
+  return `${normalizedBase} (${Date.now()})`
+}
+
+function normalizeImportedSnapshot(value: unknown): CadDocument {
+  if (!value || typeof value !== 'object') {
+    throw new Error('文件内容不是有效的 CAD JSON')
+  }
+  const snapshot = value as Partial<CadDocument>
+  if (!Array.isArray(snapshot.sketches) || !Array.isArray(snapshot.features)) {
+    throw new Error('文件缺少 sketches 或 features，无法作为 CAD 模型导入')
+  }
+  return {
+    schemaVersion: snapshot.schemaVersion || '1.0',
+    documentId: snapshot.documentId || 'imported',
+    name: snapshot.name || '导入模型',
+    unit: snapshot.unit || 'mm',
+    metadata: snapshot.metadata || { currentVersion: 0 },
+    sketches: snapshot.sketches,
+    features: snapshot.features,
+    assemblies: snapshot.assemblies ?? []
+  }
+}
+
+function formatTime(value?: string): string {
+  if (!value) return '-'
+  return new Date(value).toLocaleString()
 }
 
 async function acceptInvitation(invitationId: number) {
@@ -178,9 +459,25 @@ async function rejectInvitation(invitationId: number) {
   margin-bottom: 20px;
 }
 
+.project-section-title {
+  margin-top: 28px;
+}
+
 .section-title h1 {
   margin: 0;
   font-size: 22px;
+}
+
+.section-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.form-tip {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .invitation-panel {
@@ -254,6 +551,22 @@ async function rejectInvitation(invitationId: number) {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 16px;
+}
+
+.document-table {
+  margin-bottom: 8px;
+  border: 1px solid #d8dee9;
+  border-radius: 8px;
+}
+
+.table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.table-actions :deep(.el-button) {
+  margin-left: 0;
 }
 
 .project-actions :deep(.el-button) {

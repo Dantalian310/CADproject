@@ -60,7 +60,8 @@ export function resolveCadKeyboardAction(event: CadKeyboardShortcutInput): CadKe
 
   if (event.shiftKey) {
     if (key === 'e') return { type: 'set-tool', tool: 'extrude' }
-    if (key === 'x') return { type: 'set-tool', tool: 'cut' }
+    if (key === 'u') return { type: 'set-tool', tool: 'booleanAdd' }
+    if (key === 'x') return { type: 'set-tool', tool: 'booleanSubtract' }
     if (key === '1') return { type: 'view', command: 'front' }
     if (key === '5') return { type: 'view', command: 'top' }
     if (key === '7') return { type: 'view', command: 'isometric' }

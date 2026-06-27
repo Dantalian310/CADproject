@@ -88,6 +88,8 @@ try {
   assert(resolveCadKeyboardAction({ key: 'f' })?.command === 'fit', 'keyboard shortcut maps F to fit view')
   assert(resolveCadKeyboardAction({ key: '5', shiftKey: true })?.command === 'top', 'keyboard shortcut maps Shift+5 to top view')
   assert(resolveCadKeyboardAction({ key: 'e', shiftKey: true })?.tool === 'extrude', 'keyboard shortcut maps Shift+E to extrude')
+  assert(resolveCadKeyboardAction({ key: 'u', shiftKey: true })?.tool === 'booleanAdd', 'keyboard shortcut maps Shift+U to boolean add')
+  assert(resolveCadKeyboardAction({ key: 'x', shiftKey: true })?.tool === 'booleanSubtract', 'keyboard shortcut maps Shift+X to boolean subtract')
   assert(resolveCadKeyboardAction({ key: 'l', altKey: true }) === null, 'keyboard shortcuts ignore Alt-modified free navigation input')
 
   const kernel = new ThreeGeometryKernel()
@@ -194,6 +196,18 @@ try {
   assert(featureMeshes[0].featureId === 'boolean-001', 'final feature is boolean result')
   assert(featureMeshes[0].geometry.attributes.position.count > 0, 'boolean result has vertices')
 
+  const movedBooleanDocument = {
+    ...document,
+    features: document.features.map((feature) =>
+      feature.id === 'boolean-001'
+        ? { ...feature, operation: 'subtract', position: { x: 25, y: -10, z: 5 } }
+        : feature
+    )
+  }
+  const movedBooleanMesh = kernel.buildDocument(movedBooleanDocument).find((mesh) => mesh.featureId === 'boolean-001')
+  movedBooleanMesh.geometry.computeBoundingBox()
+  assert(movedBooleanMesh.geometry.boundingBox.min.x >= 20 && movedBooleanMesh.geometry.boundingBox.min.z >= 5, 'boolean subtract result can be translated')
+
   const multiPlaneDocument = {
     ...document,
     sketches: [
@@ -257,6 +271,23 @@ try {
   yzExtrude.geometry.computeBoundingBox()
   assert(nearlyEqual(xzExtrude.geometry.boundingBox.max.y - xzExtrude.geometry.boundingBox.min.y, 12), 'XZ rectangle extrude uses Y depth')
   assert(nearlyEqual(yzExtrude.geometry.boundingBox.max.x - yzExtrude.geometry.boundingBox.min.x, 14), 'YZ circle extrude uses X depth')
+
+  const movedExtrudeDocument = {
+    ...multiPlaneDocument,
+    features: multiPlaneDocument.features.map((feature) =>
+      feature.id === 'extrude-xz'
+        ? { ...feature, position: { x: 15, y: 20, z: 25 } }
+        : feature
+    )
+  }
+  const movedExtrude = kernel.buildDocument(movedExtrudeDocument).find((mesh) => mesh.featureId === 'extrude-xz')
+  movedExtrude.geometry.computeBoundingBox()
+  assert(
+    nearlyEqual(movedExtrude.geometry.boundingBox.min.x, 15)
+      && nearlyEqual(movedExtrude.geometry.boundingBox.min.y, 20)
+      && nearlyEqual(movedExtrude.geometry.boundingBox.min.z, 25),
+    'extrude feature position translates generated solid geometry'
+  )
 
   const constructionDocument = {
     ...document,
@@ -325,6 +356,183 @@ try {
   const primitiveMeshes = kernel.buildDocument(primitiveDocument).filter((mesh) => mesh.kind !== 'line')
   assert(primitiveMeshes.length === 3, 'parameterized box sphere and cone render as feature meshes')
   assert(primitiveMeshes.some((mesh) => mesh.featureId === 'sphere-primitive-001' && mesh.geometry.attributes.position.count > 0), 'parameterized sphere produces renderable vertices')
+
+  const booleanSubtractDocument = {
+    ...document,
+    sketches: [],
+    features: [
+      {
+        id: 'box-subtract-target',
+        type: 'box',
+        name: 'Subtract Target',
+        suppressed: false,
+        position: { x: 0, y: 0, z: 5 },
+        length: 60,
+        width: 40,
+        height: 30
+      },
+      {
+        id: 'box-subtract-tool',
+        type: 'box',
+        name: 'Subtract Tool',
+        suppressed: false,
+        position: { x: 20, y: 0, z: 0 },
+        length: 40,
+        width: 60,
+        height: 50
+      },
+      {
+        id: 'boolean-subtract-001',
+        type: 'boolean',
+        name: 'Boolean Subtract',
+        suppressed: false,
+        operation: 'subtract',
+        targetFeatureId: 'box-subtract-target',
+        toolFeatureId: 'box-subtract-tool'
+      }
+    ]
+  }
+  const booleanSubtractMesh = kernel.buildDocument(booleanSubtractDocument).find((mesh) => mesh.featureId === 'boolean-subtract-001')
+  const booleanSubtractToolMesh = kernel.buildDocument(booleanSubtractDocument).find((mesh) => mesh.featureId === 'box-subtract-tool')
+  booleanSubtractMesh.geometry.computeBoundingBox()
+  assert(booleanSubtractMesh.geometry.boundingBox.max.x <= 0.01, 'boolean subtract removes tool volume from the target body')
+  assert(booleanSubtractToolMesh?.geometry.attributes.position.count > 0, 'boolean subtract keeps the tool body visible and movable')
+
+  const frozenSubtractSeedDocument = {
+    ...booleanSubtractDocument,
+    features: booleanSubtractDocument.features.slice(0, 2)
+  }
+  const frozenSubtractFeature = {
+    ...booleanSubtractDocument.features[2],
+    id: 'boolean-subtract-frozen'
+  }
+  const frozenResultMesh = kernel.buildBooleanResultMesh(frozenSubtractSeedDocument, frozenSubtractFeature)
+  assert(frozenResultMesh?.vertices.length > 0, 'boolean subtract can be stored as a frozen result mesh')
+  const frozenSubtractDocument = {
+    ...frozenSubtractSeedDocument,
+    features: [
+      ...frozenSubtractSeedDocument.features,
+      {
+        ...frozenSubtractFeature,
+        resultMesh: frozenResultMesh
+      }
+    ]
+  }
+  const frozenSubtractBefore = kernel.buildDocument(frozenSubtractDocument).find((mesh) => mesh.featureId === 'boolean-subtract-frozen')
+  frozenSubtractBefore.geometry.computeBoundingBox()
+  const movedToolFrozenDocument = {
+    ...frozenSubtractDocument,
+    features: frozenSubtractDocument.features.map((feature) =>
+      feature.id === 'box-subtract-tool'
+        ? { ...feature, position: { ...feature.position, x: -40 } }
+        : feature
+    )
+  }
+  const frozenSubtractAfter = kernel.buildDocument(movedToolFrozenDocument).find((mesh) => mesh.featureId === 'boolean-subtract-frozen')
+  const movedFrozenTool = kernel.buildDocument(movedToolFrozenDocument).find((mesh) => mesh.featureId === 'box-subtract-tool')
+  frozenSubtractAfter.geometry.computeBoundingBox()
+  movedFrozenTool.geometry.computeBoundingBox()
+  assert(
+    nearlyEqual(frozenSubtractBefore.geometry.boundingBox.min.x, frozenSubtractAfter.geometry.boundingBox.min.x)
+      && nearlyEqual(frozenSubtractBefore.geometry.boundingBox.max.x, frozenSubtractAfter.geometry.boundingBox.max.x)
+      && nearlyEqual(frozenSubtractBefore.geometry.boundingBox.min.y, frozenSubtractAfter.geometry.boundingBox.min.y)
+      && nearlyEqual(frozenSubtractBefore.geometry.boundingBox.max.y, frozenSubtractAfter.geometry.boundingBox.max.y)
+      && nearlyEqual(frozenSubtractBefore.geometry.boundingBox.min.z, frozenSubtractAfter.geometry.boundingBox.min.z)
+      && nearlyEqual(frozenSubtractBefore.geometry.boundingBox.max.z, frozenSubtractAfter.geometry.boundingBox.max.z),
+    'frozen boolean subtract result does not change when the tool body moves'
+  )
+  assert(movedFrozenTool.geometry.boundingBox.max.x < 0, 'boolean subtract tool remains independently movable after freezing')
+
+  const sketchCutDocument = {
+    ...document,
+    sketches: [
+      {
+        id: 'sketch-cut-profile',
+        name: 'Cut Profile Sketch',
+        plane: 'XY',
+        entities: [{
+          id: 'rect-cut-profile',
+          type: 'rectangle',
+          name: 'Cut Profile',
+          visible: true,
+          origin: { x: 0, y: -30 },
+          width: 50,
+          height: 60
+        }],
+        constraints: []
+      }
+    ],
+    features: [
+      {
+        id: 'box-cut-target',
+        type: 'box',
+        name: 'Cut Target',
+        suppressed: false,
+        position: { x: 0, y: 0, z: 5 },
+        length: 60,
+        width: 40,
+        height: 30
+      },
+      {
+        id: 'cut-feature-001',
+        type: 'cut',
+        name: 'Sketch Cut',
+        suppressed: false,
+        targetFeatureId: 'box-cut-target',
+        toolSketchId: 'sketch-cut-profile',
+        toolEntityId: 'rect-cut-profile',
+        depth: 50
+      }
+    ]
+  }
+  const sketchCutMesh = kernel.buildDocument(sketchCutDocument).find((mesh) => mesh.featureId === 'cut-feature-001')
+  sketchCutMesh.geometry.computeBoundingBox()
+  assert(sketchCutMesh.geometry.boundingBox.max.x <= 0.01, 'sketch cut removes the extruded profile from the target body')
+
+  const meshFeatureDocument = {
+    ...document,
+    sketches: [],
+    features: [{
+      id: 'mesh-import-001',
+      type: 'mesh',
+      name: 'Imported Mesh',
+      suppressed: false,
+      format: 'stl',
+      position: { x: 10, y: 20, z: 30 },
+      rotation: { x: 0, y: 0, z: 0 },
+      vertices: [
+        0, 0, 0,
+        20, 0, 0,
+        0, 20, 0
+      ],
+      color: '#94a3b8'
+    }]
+  }
+  const meshFeature = kernel.buildDocument(meshFeatureDocument).find((mesh) => mesh.featureId === 'mesh-import-001')
+  meshFeature.geometry.computeBoundingBox()
+  assert(
+    nearlyEqual(meshFeature.geometry.boundingBox.min.x, 10)
+      && nearlyEqual(meshFeature.geometry.boundingBox.min.y, 20)
+      && nearlyEqual(meshFeature.geometry.boundingBox.min.z, 30),
+    'imported mesh feature renders with transform'
+  )
+
+  const rotatedPrimitiveDocument = {
+    ...primitiveDocument,
+    features: [
+      {
+        ...primitiveDocument.features[0],
+        rotation: { x: 0, y: 0, z: 45 }
+      }
+    ]
+  }
+  const rotatedBoxMesh = kernel.buildDocument(rotatedPrimitiveDocument).find((mesh) => mesh.featureId === 'box-primitive-001')
+  rotatedBoxMesh.geometry.computeBoundingBox()
+  assert(
+    rotatedBoxMesh.geometry.boundingBox.max.x - rotatedBoxMesh.geometry.boundingBox.min.x > 60
+      && rotatedBoxMesh.geometry.boundingBox.max.y - rotatedBoxMesh.geometry.boundingBox.min.y > 40,
+    'parameterized box rotation changes its world bounding box'
+  )
 
   const sketchSvg = exportSketchDocumentSvg(document)
   assert(sketchSvg.includes('<rect') && sketchSvg.includes('<circle') && sketchSvg.includes('<path'), 'SVG export serializes rectangle, circle, and arc sketch geometry')
@@ -957,7 +1165,44 @@ try {
     'remote batch feature update replaces selected features'
   )
 
-  const remoteFeatureBatchDeletedDocument = applyRemoteOperation(remoteFeatureBatchUpdatedDocument, {
+  const remoteAssemblyDocument = applyRemoteOperation(remoteFeatureBatchUpdatedDocument, {
+    operationId: 'op-feature-assembly-updated',
+    documentId: 1,
+    type: 'feature.updated',
+    targetId: 'assembly-fix',
+    baseVersion: 1,
+    payload: {
+      updates: [
+        {
+          after: {
+            id: 'sphere-remote-001',
+            type: 'sphere',
+            name: 'Remote Sphere Fixed',
+            suppressed: false,
+            locked: true,
+            position: { x: 50, y: 60, z: 0 },
+            rotation: { x: 0, y: 0, z: 30 },
+            radius: 22
+          }
+        }
+      ],
+      assemblies: [
+        {
+          id: 'asm-remote-fix-001',
+          type: 'fix',
+          featureId: 'sphere-remote-001'
+        }
+      ]
+    },
+    clientTimestamp: new Date().toISOString()
+  })
+  assert(
+    remoteAssemblyDocument.features.find((feature) => feature.id === 'sphere-remote-001')?.locked === true
+      && remoteAssemblyDocument.assemblies?.some((constraint) => constraint.id === 'asm-remote-fix-001'),
+    'remote batch feature update synchronizes assembly constraints'
+  )
+
+  const remoteFeatureBatchDeletedDocument = applyRemoteOperation(remoteAssemblyDocument, {
     operationId: 'op-features-deleted',
     documentId: 1,
     type: 'feature.deleted',

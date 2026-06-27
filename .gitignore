@@ -8,6 +8,7 @@ Thumbs.db
 # Logs
 *.log
 logs/
+backups/
 
 # Frontend
 frontend/node_modules/
@@ -29,9 +30,15 @@ backend/.mvn/wrapper/maven-wrapper.jar
 
 # Environment files
 .env
+.env.*
+!.env.example
 .env.local
 frontend/.env.local
 backend/.env
+
+# Secrets / server keys
+*.pem
+*.key
 
 # Database dumps
 *.sql.gz

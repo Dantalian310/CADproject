@@ -1,5 +1,5 @@
 import { http, unwrap } from './http'
-import type { CreateDocumentRequest, DocumentDTO, SaveDocumentRequest } from './types'
+import type { CreateDocumentRequest, DocumentDTO, SaveDocumentRequest, UpdateDocumentRequest } from './types'
 
 export function listDocuments(projectId: number): Promise<DocumentDTO[]> {
   return unwrap(http.get(`/api/projects/${projectId}/documents`))
@@ -15,6 +15,10 @@ export function getDocument(documentId: number): Promise<DocumentDTO> {
 
 export function saveDocument(documentId: number, request: SaveDocumentRequest): Promise<DocumentDTO> {
   return unwrap(http.put(`/api/documents/${documentId}/save`, request))
+}
+
+export function updateDocument(documentId: number, request: UpdateDocumentRequest): Promise<DocumentDTO> {
+  return unwrap(http.put(`/api/documents/${documentId}`, request))
 }
 
 export async function exportDocumentJson(documentId: number): Promise<Blob> {

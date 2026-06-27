@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import type { CadDocument, Point2, RectangleEntity, SketchConstraint, SketchEntity, SketchPlane } from '@/cad/model/document'
+import type { CadDocument, Point2, Point3, RectangleEntity, SketchConstraint, SketchEntity, SketchPlane } from '@/cad/model/document'
 import type { CadSelection } from '@/cad/model/selection'
 import { buildDimensionAnnotations, type DimensionAnnotation } from './sketchDimensionAnnotations'
 import { constraintLabel } from './sketchConstraints'
@@ -21,11 +21,18 @@ export class SceneManager {
   private controls: OrbitControls | null = null
   private renderer: THREE.WebGLRenderer | null = null
   private container: HTMLElement | null = null
-  private sketchGrid: THREE.GridHelper | null = null
+  private sketchGrids: THREE.GridHelper[] = []
   private currentGridSize = 0
+  private currentGridWorldSize = 400
   private activeSketchPlane: SketchPlane = 'XY'
   private objects: THREE.Object3D[] = []
   private animationFrame = 0
+  private featureTransformBaselines: Array<{
+    object: THREE.Object3D
+    position: THREE.Vector3
+    quaternion: THREE.Quaternion
+    scale: THREE.Vector3
+  }> = []
 
   constructor(private readonly kernel: GeometryKernel) {
     this.scene.background = new THREE.Color('#e7ebf0')
@@ -33,6 +40,7 @@ export class SceneManager {
     this.camera.lookAt(0, 0, 0)
     this.setGridSize(5)
     this.scene.add(new THREE.AxesHelper(120))
+    this.addAxisDirectionLabels()
     this.scene.add(new THREE.AmbientLight('#ffffff', 0.8))
     const light = new THREE.DirectionalLight('#ffffff', 1)
     light.position.set(80, -120, 160)
@@ -69,11 +77,14 @@ export class SceneManager {
     previewEntities: SketchEntity[] = []
   ): void {
     this.clearObjects()
-    for (const descriptor of this.kernel.buildDocument(document)) {
+    const descriptors = this.kernel.buildDocument(document)
+    this.updateGridExtentFromDescriptors(descriptors)
+    for (const descriptor of descriptors) {
       const mesh = descriptor.kind === 'line'
         ? this.createLineObject(descriptor.geometry, descriptor.material)
         : new THREE.Mesh(descriptor.geometry, descriptor.material)
       mesh.userData.featureId = descriptor.featureId
+      mesh.userData.pickableFeature = Boolean(descriptor.featureId && descriptor.kind !== 'line')
       this.objects.push(mesh)
       this.scene.add(mesh)
     }
@@ -93,7 +104,7 @@ export class SceneManager {
 
   setActiveSketchPlane(plane: SketchPlane): void {
     this.activeSketchPlane = plane
-    this.updateGridTransform()
+    this.updateGridStyles()
     this.render()
   }
 
@@ -112,6 +123,23 @@ export class SceneManager {
     return this.vectorToPlanePoint(intersection, plane)
   }
 
+  screenToCameraPlanePoint(clientX: number, clientY: number, anchor: Point3): Point3 | null {
+    if (!this.renderer) return null
+    const rect = this.renderer.domElement.getBoundingClientRect()
+    const mouse = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1
+    )
+    this.raycaster.setFromCamera(mouse, this.camera)
+    const normal = new THREE.Vector3()
+    this.camera.getWorldDirection(normal)
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, new THREE.Vector3(anchor.x, anchor.y, anchor.z))
+    const intersection = new THREE.Vector3()
+    const hit = this.raycaster.ray.intersectPlane(plane, intersection)
+    if (!hit) return null
+    return { x: intersection.x, y: intersection.y, z: intersection.z }
+  }
+
   pickFeature(clientX: number, clientY: number): string | null {
     if (!this.renderer) return null
     const rect = this.renderer.domElement.getBoundingClientRect()
@@ -121,10 +149,96 @@ export class SceneManager {
     )
     this.raycaster.setFromCamera(mouse, this.camera)
     const hits = this.raycaster.intersectObjects(
-      this.objects.filter((object) => object.userData.featureId && object.type !== 'Line'),
+      this.objects.filter((object) => object.userData.pickableFeature),
       false
     )
     return typeof hits[0]?.object.userData.featureId === 'string' ? hits[0].object.userData.featureId : null
+  }
+
+  beginFeatureTransform(featureIds: string[]): void {
+    const selected = new Set(featureIds)
+    this.featureTransformBaselines = this.objects
+      .filter((object) => typeof object.userData.featureId === 'string' && selected.has(object.userData.featureId))
+      .map((object) => ({
+        object,
+        position: object.position.clone(),
+        quaternion: object.quaternion.clone(),
+        scale: object.scale.clone()
+      }))
+  }
+
+  previewFeatureTranslation(delta: Point3): void {
+    for (const baseline of this.featureTransformBaselines) {
+      baseline.object.position.set(
+        baseline.position.x + delta.x,
+        baseline.position.y + delta.y,
+        baseline.position.z + delta.z
+      )
+    }
+    this.render()
+  }
+
+  endFeatureTransform(reset = false): void {
+    if (reset) {
+      for (const baseline of this.featureTransformBaselines) {
+        baseline.object.position.copy(baseline.position)
+        baseline.object.quaternion.copy(baseline.quaternion)
+        baseline.object.scale.copy(baseline.scale)
+      }
+      this.render()
+    }
+    this.featureTransformBaselines = []
+  }
+
+  getFeaturesInScreenBox(start: Point2, end: Point2): string[] {
+    if (!this.renderer) return []
+    const rect = this.renderer.domElement.getBoundingClientRect()
+    const minX = Math.min(start.x, end.x)
+    const maxX = Math.max(start.x, end.x)
+    const minY = Math.min(start.y, end.y)
+    const maxY = Math.max(start.y, end.y)
+    const selected = new Set<string>()
+
+    for (const object of this.objects.filter((item) => item.userData.pickableFeature)) {
+      const box = new THREE.Box3().setFromObject(object)
+      if (box.isEmpty()) continue
+      const points = this.boxCorners(box)
+      const projected = points
+        .map((point) => point.project(this.camera))
+        .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y) && point.z >= -1 && point.z <= 1)
+        .map((point) => ({
+          x: ((point.x + 1) / 2) * rect.width,
+          y: ((-point.y + 1) / 2) * rect.height
+        }))
+      if (projected.length === 0) continue
+      const bounds = {
+        minX: Math.min(...projected.map((point) => point.x)),
+        maxX: Math.max(...projected.map((point) => point.x)),
+        minY: Math.min(...projected.map((point) => point.y)),
+        maxY: Math.max(...projected.map((point) => point.y))
+      }
+      if (bounds.minX <= maxX && bounds.maxX >= minX && bounds.minY <= maxY && bounds.maxY >= minY) {
+        const featureId = object.userData.featureId
+        if (typeof featureId === 'string') selected.add(featureId)
+      }
+    }
+
+    return [...selected]
+  }
+
+  getFeatureWorldCenter(featureId: string): Point3 | null {
+    const candidates = this.objects.filter((object) =>
+      object.userData.pickableFeature && object.userData.featureId === featureId
+    )
+    if (candidates.length === 0) return null
+    const box = new THREE.Box3()
+    for (const candidate of candidates) {
+      box.expandByObject(candidate)
+    }
+    if (box.isEmpty()) return null
+    const center = new THREE.Vector3()
+    box.getCenter(center)
+    return { x: center.x, y: center.y, z: center.z }
   }
 
   sketchPointToScreen(point: Point2, plane: SketchPlane = this.activeSketchPlane, normalOffset = 18): Point2 | null {
@@ -152,13 +266,9 @@ export class SceneManager {
 
   setGridSize(gridSize: number): void {
     const safeGridSize = Math.max(1, Number.isFinite(gridSize) ? gridSize : 5)
-    if (safeGridSize === this.currentGridSize && this.sketchGrid) return
-    this.disposeGrid()
-    const divisions = Math.max(4, Math.min(400, Math.round(400 / safeGridSize)))
+    if (safeGridSize === this.currentGridSize && this.sketchGrids.length > 0) return
     this.currentGridSize = safeGridSize
-    this.sketchGrid = new THREE.GridHelper(400, divisions, '#9ca3af', '#d1d5db')
-    this.updateGridTransform()
-    this.scene.add(this.sketchGrid)
+    this.rebuildGrids(this.currentGridWorldSize)
     this.render()
   }
 
@@ -223,7 +333,7 @@ export class SceneManager {
       this.animationFrame = 0
     }
     this.clearObjects()
-    this.disposeGrid()
+    this.disposeGrids()
     this.controls?.dispose()
     this.controls = null
     this.renderer?.dispose()
@@ -266,17 +376,97 @@ export class SceneManager {
     material.dispose()
   }
 
-  private disposeGrid(): void {
-    if (!this.sketchGrid) return
-    this.scene.remove(this.sketchGrid)
-    this.sketchGrid.geometry.dispose()
-    const material = this.sketchGrid.material
-    if (Array.isArray(material)) {
-      material.forEach((item) => item.dispose())
-    } else {
-      material.dispose()
+  private disposeGrids(): void {
+    for (const grid of this.sketchGrids) {
+      this.scene.remove(grid)
+      grid.geometry.dispose()
+      const material = grid.material
+      if (Array.isArray(material)) {
+        material.forEach((item) => item.dispose())
+      } else {
+        material.dispose()
+      }
     }
-    this.sketchGrid = null
+    this.sketchGrids = []
+  }
+
+  private rebuildGrids(worldSize: number): void {
+    this.disposeGrids()
+    const divisions = Math.max(4, Math.min(600, Math.round(worldSize / Math.max(1, this.currentGridSize))))
+    this.currentGridWorldSize = worldSize
+    this.sketchGrids = [
+      this.createPlaneGrid('XY', worldSize, divisions),
+      this.createPlaneGrid('XZ', worldSize, divisions),
+      this.createPlaneGrid('YZ', worldSize, divisions)
+    ]
+    this.updateGridStyles()
+    for (const grid of this.sketchGrids) {
+      this.scene.add(grid)
+    }
+  }
+
+  private createPlaneGrid(plane: SketchPlane, worldSize: number, divisions: number): THREE.GridHelper {
+    const grid = new THREE.GridHelper(worldSize, divisions, '#94a3b8', '#d1d5db')
+    grid.userData.plane = plane
+    if (plane === 'XY') {
+      grid.rotateX(Math.PI / 2)
+    }
+    if (plane === 'YZ') {
+      grid.rotateZ(Math.PI / 2)
+    }
+    return grid
+  }
+
+  private updateGridExtentFromDescriptors(descriptors: ReturnType<GeometryKernel['buildDocument']>): void {
+    const box = new THREE.Box3()
+    for (const descriptor of descriptors) {
+      descriptor.geometry.computeBoundingBox()
+      if (descriptor.geometry.boundingBox) {
+        box.union(descriptor.geometry.boundingBox)
+      }
+    }
+    let worldSize = 400
+    if (!box.isEmpty()) {
+      const center = box.getCenter(new THREE.Vector3())
+      const size = box.getSize(new THREE.Vector3())
+      const halfSpan = Math.max(
+        Math.abs(center.x) + size.x / 2,
+        Math.abs(center.y) + size.y / 2,
+        Math.abs(center.z) + size.z / 2,
+        160
+      )
+      const padded = halfSpan * 2 + Math.max(80, this.currentGridSize * 8)
+      worldSize = Math.max(400, Math.ceil(padded / this.currentGridSize) * this.currentGridSize)
+    }
+    if (Math.abs(worldSize - this.currentGridWorldSize) >= this.currentGridSize * 4 || this.sketchGrids.length === 0) {
+      this.rebuildGrids(worldSize)
+    }
+  }
+
+  private updateGridStyles(): void {
+    for (const grid of this.sketchGrids) {
+      const material = grid.material
+      const materials = Array.isArray(material) ? material : [material]
+      const isActive = grid.userData.plane === this.activeSketchPlane
+      for (const item of materials) {
+        item.transparent = true
+        item.opacity = isActive ? 0.5 : 0.18
+        item.depthWrite = false
+      }
+    }
+  }
+
+  private boxCorners(box: THREE.Box3): THREE.Vector3[] {
+    return [
+      new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+      new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+      new THREE.Vector3(box.min.x, box.max.y, box.min.z),
+      new THREE.Vector3(box.min.x, box.max.y, box.max.z),
+      new THREE.Vector3(box.max.x, box.min.y, box.min.z),
+      new THREE.Vector3(box.max.x, box.min.y, box.max.z),
+      new THREE.Vector3(box.max.x, box.max.y, box.min.z),
+      new THREE.Vector3(box.max.x, box.max.y, box.max.z)
+    ]
   }
 
   private startRenderLoop(): void {
@@ -527,6 +717,20 @@ export class SceneManager {
     this.scene.add(sprite)
   }
 
+  private addAxisDirectionLabels(): void {
+    if (!globalThis.document) return
+    const labels: Array<{ text: string; color: string; position: Point3 }> = [
+      { text: '+X', color: '#dc2626', position: { x: 142, y: 0, z: 0 } },
+      { text: '+Y', color: '#16a34a', position: { x: 0, y: 142, z: 0 } },
+      { text: '+Z', color: '#2563eb', position: { x: 0, y: 0, z: 142 } }
+    ]
+    for (const label of labels) {
+      const sprite = this.createTextSprite(label.text, label.color)
+      sprite.position.set(label.position.x, label.position.y, label.position.z)
+      this.scene.add(sprite)
+    }
+  }
+
   private entityBadgePoint(entity: SketchEntity): Point2 {
     if (entity.type === 'line') {
       return {
@@ -602,18 +806,6 @@ export class SceneManager {
       return new THREE.Plane(new THREE.Vector3(1, 0, 0), -normalOffset)
     }
     return new THREE.Plane(new THREE.Vector3(0, 0, 1), -normalOffset)
-  }
-
-  private updateGridTransform(): void {
-    if (!this.sketchGrid) return
-    this.sketchGrid.rotation.set(0, 0, 0)
-    this.sketchGrid.position.set(0, 0, 0)
-    if (this.activeSketchPlane === 'XY') {
-      this.sketchGrid.rotateX(Math.PI / 2)
-    }
-    if (this.activeSketchPlane === 'YZ') {
-      this.sketchGrid.rotateZ(Math.PI / 2)
-    }
   }
 
   private createTextSprite(text: string, color: string): THREE.Sprite {

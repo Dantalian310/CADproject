@@ -1,4 +1,4 @@
-import type { CadDocument, Feature, Sketch, SketchConstraint, SketchEntity } from '@/cad/model/document'
+import type { AssemblyConstraint, CadDocument, Feature, Sketch, SketchConstraint, SketchEntity } from '@/cad/model/document'
 import type { CadOperation } from '@/cad/model/operation'
 import { applyConstraintsToEntity, applyRelationConstraint, isRelationConstraint } from '@/cad/geometry/sketchConstraints'
 
@@ -10,7 +10,10 @@ function featureReferencesEntity(feature: Feature, entityId: string): boolean {
 
 function featureReferencesFeature(feature: Feature, featureId: string): boolean {
   if (feature.type === 'cut') return feature.targetFeatureId === featureId
-  if (feature.type === 'boolean') return feature.targetFeatureId === featureId || feature.toolFeatureId === featureId
+  if (feature.type === 'boolean') {
+    const frozenSubtract = (feature.operation === 'subtract' || feature.operation === 'difference') && Boolean(feature.resultMesh?.vertices.length)
+    return feature.targetFeatureId === featureId || (!frozenSubtract && feature.toolFeatureId === featureId)
+  }
   return false
 }
 
@@ -41,6 +44,12 @@ function replaceSketchEntity(document: CadDocument, sketchId: string, entity: Sk
   if (index < 0) return false
   sketch.entities[index] = structuredClone(entity)
   return true
+}
+
+function isAssemblyConstraint(value: unknown): value is AssemblyConstraint {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as { id?: unknown; type?: unknown }
+  return typeof candidate.id === 'string' && typeof candidate.type === 'string'
 }
 
 function findOrCreateSketch(document: CadDocument, sketchId: string, sketchPayload: unknown): Sketch | null {
@@ -216,11 +225,15 @@ export function applyRemoteOperation(document: CadDocument, operation: CadOperat
   if (operation.type === 'feature.updated') {
     const feature = operation.payload.feature as Feature | undefined
     const updates = operation.payload.updates as Array<{ after: Feature }> | undefined
+    const assemblies = operation.payload.assemblies
     if (Array.isArray(updates)) {
       for (const update of updates) {
         if (!update.after) continue
         const index = nextDocument.features.findIndex((item) => item.id === update.after.id)
         if (index >= 0) nextDocument.features[index] = update.after
+      }
+      if (Array.isArray(assemblies)) {
+        nextDocument.assemblies = structuredClone(assemblies)
       }
       return applyRelationConstraintsToDocument(nextDocument)
     }
@@ -228,6 +241,13 @@ export function applyRemoteOperation(document: CadDocument, operation: CadOperat
     const index = nextDocument.features.findIndex((item) => item.id === feature.id)
     if (index < 0) return document
     nextDocument.features[index] = feature
+    const assemblyConstraint = operation.payload.assemblyConstraint
+    if (isAssemblyConstraint(assemblyConstraint)) {
+      nextDocument.assemblies = [...(nextDocument.assemblies ?? []), structuredClone(assemblyConstraint)]
+    }
+    if (Array.isArray(assemblies)) {
+      nextDocument.assemblies = structuredClone(assemblies)
+    }
     return applyRelationConstraintsToDocument(nextDocument)
   }
   if (operation.type === 'feature.deleted') {

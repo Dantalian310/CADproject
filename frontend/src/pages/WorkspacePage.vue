@@ -9,7 +9,7 @@
       </div>
       <div class="workspace-actions">
         <span class="muted">{{ authStore.currentUser?.username }}</span>
-        <el-button size="small" @click="leaveWorkspace">项目列表</el-button>
+        <el-button size="small" @click="leaveWorkspace">退出项目</el-button>
         <el-button size="small" text @click="logout">退出登录</el-button>
       </div>
     </header>
@@ -19,6 +19,8 @@
       @versions="versionVisible = true"
       @export-svg="exportSvg"
       @export-dxf="exportDxf"
+      @export-stl="exportStl"
+      @export-glb="exportGlb"
       @view="handleViewCommand"
     />
     <section class="workspace-body">
@@ -38,7 +40,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import CadToolbar from '@/components/toolbar/CadToolbar.vue'
 import FeatureTree from '@/components/feature-tree/FeatureTree.vue'
@@ -52,6 +54,7 @@ import { useCadStore } from '@/stores/cad.store'
 import { useCollaborationStore } from '@/stores/collaboration.store'
 import { useProjectStore } from '@/stores/project.store'
 import { exportSketchDocumentDxf, exportSketchDocumentSvg } from '@/cad/io/sketchExport'
+import { exportCadDocumentGlb, exportCadDocumentStl } from '@/cad/io/solidExport'
 
 const route = useRoute()
 const router = useRouter()
@@ -65,7 +68,7 @@ const projectId = computed(() => Number(route.params.projectId))
 const documentId = computed(() => Number(route.params.documentId))
 
 onMounted(async () => {
-  window.addEventListener('beforeunload', disconnectCollaboration)
+  window.addEventListener('beforeunload', handleBeforeUnload)
   await projectStore.loadProject(projectId.value)
   await cadStore.loadDocument(documentId.value)
   if (authStore.token) {
@@ -74,7 +77,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('beforeunload', disconnectCollaboration)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
   disconnectCollaboration()
 })
 
@@ -82,8 +85,17 @@ function disconnectCollaboration() {
   collaborationStore.disconnect()
 }
 
-function save() {
-  void cadStore.save(documentId.value, 'manual save')
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (cadStore.dirty) {
+    event.preventDefault()
+    event.returnValue = ''
+  }
+  disconnectCollaboration()
+}
+
+async function save() {
+  await cadStore.save(documentId.value, 'manual save')
+  ElMessage.success('已保存')
 }
 
 function exportSvg() {
@@ -92,6 +104,14 @@ function exportSvg() {
 
 function exportDxf() {
   exportSketch('dxf')
+}
+
+async function exportStl() {
+  await exportSolid('stl')
+}
+
+async function exportGlb() {
+  await exportSolid('glb')
 }
 
 function exportSketch(format: 'svg' | 'dxf') {
@@ -117,6 +137,27 @@ function downloadTextFile(content: string, fileName: string, mimeType: string) {
   URL.revokeObjectURL(url)
 }
 
+async function exportSolid(format: 'stl' | 'glb') {
+  if (!cadStore.document) {
+    ElMessage.warning('当前没有可导出的 CAD 文档')
+    return
+  }
+  const blob = format === 'stl'
+    ? await exportCadDocumentStl(cadStore.document)
+    : await exportCadDocumentGlb(cadStore.document)
+  downloadBlob(blob, `${safeFileName(cadStore.document.name)}.${format}`)
+  ElMessage.success(`已导出 ${format.toUpperCase()} 三维模型`)
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob)
+  const link = window.document.createElement('a')
+  link.href = url
+  link.download = fileName
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
 function safeFileName(name: string) {
   return name.trim().replace(/[\\/:*?"<>|]+/g, '_') || 'cad-sketch'
 }
@@ -125,13 +166,39 @@ function handleViewCommand(command: 'top' | 'front' | 'right' | 'isometric' | 'f
 }
 
 async function leaveWorkspace() {
+  const canLeave = await confirmUnsavedChanges()
+  if (!canLeave) return
   disconnectCollaboration()
   await router.push('/projects')
 }
 
 async function logout() {
+  const canLeave = await confirmUnsavedChanges()
+  if (!canLeave) return
   disconnectCollaboration()
   authStore.logout()
   await router.push('/login')
+}
+
+async function confirmUnsavedChanges(): Promise<boolean> {
+  if (!cadStore.dirty || projectStore.currentProject?.myRole === 'VIEWER') return true
+  try {
+    await ElMessageBox.confirm(
+      '当前模型有未保存修改，是否保存后再退出？',
+      '退出项目',
+      {
+        confirmButtonText: '保存并退出',
+        cancelButtonText: '直接退出',
+        distinguishCancelAndClose: true,
+        type: 'warning'
+      }
+    )
+    await cadStore.save(documentId.value, 'save before exit')
+    ElMessage.success('已保存')
+    return true
+  } catch (action) {
+    if (action === 'cancel') return true
+    return false
+  }
 }
 </script>

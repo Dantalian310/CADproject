@@ -128,7 +128,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
-import type { ArcEntity, Feature, LineEntity, Point2, RectangleEntity, SketchEntity } from '@/cad/model/document'
+import type { ArcEntity, Feature, LineEntity, Point2, Point3, RectangleEntity, SketchEntity } from '@/cad/model/document'
 import { useCadStore, type CadToolType } from '@/stores/cad.store'
 import { useCollaborationStore } from '@/stores/collaboration.store'
 import { SceneManager } from '@/cad/geometry/sceneManager'
@@ -155,7 +155,7 @@ type ResizeHandle =
   | 'arc-end'
   | 'arc-radius'
 
-type DragMode = 'draw' | 'move' | 'move-many' | 'resize' | 'box-select' | 'feature-move' | 'feature-move-many'
+type DragMode = 'draw' | 'move' | 'move-many' | 'resize' | 'box-select' | 'feature-move' | 'feature-move-many' | 'feature-rotate' | 'feature-rotate-many'
 
 interface SelectedEntitySnapshot {
   sketchId: string
@@ -166,6 +166,7 @@ interface DragState {
   pointerId: number
   mode: DragMode
   startPoint: Point2
+  startPoint3?: Point3
   screenStart?: Point2
   screenCurrent?: Point2
   sketchId?: string
@@ -175,6 +176,8 @@ interface DragState {
   originalFeature?: Feature
   originalFeatures?: Feature[]
   originalEntities?: SelectedEntitySnapshot[]
+  featureIds?: string[]
+  featureDelta?: Point3
   handle?: ResizeHandle
   tool?: Extract<CadToolType, 'line' | 'rectangle' | 'circle' | 'arc'>
   arcCenter?: Point2
@@ -287,13 +290,16 @@ watch(
     () => cadStore.document,
     () => cadStore.selection,
     () => cadStore.transformPreviewEntities,
-    () => cadStore.sketchSnapSettings,
+    () => cadStore.sketchSnapSettings.gridSnap,
+    () => cadStore.sketchSnapSettings.objectSnap,
+    () => cadStore.sketchSnapSettings.angleSnap,
+    () => cadStore.sketchSnapSettings.gridSize,
+    () => cadStore.sketchSnapSettings.angleStep,
     () => cadStore.activeSketchPlane,
     () => draftEntity.value,
     () => activeSnap.value
   ],
-  () => refreshScene(),
-  { deep: true }
+  () => refreshScene()
 )
 
 watch(
@@ -318,6 +324,7 @@ function resize() {
 }
 
 function refreshScene() {
+  if (isFeatureTranslationDrag(dragState.value)) return
   if (cadStore.document) {
     sceneManager?.setActiveSketchPlane(cadStore.activeSketchPlane)
     sceneManager?.setGridSize(cadStore.sketchSnapSettings.gridSize)
@@ -401,14 +408,15 @@ function handlePointerDown(event: PointerEvent) {
   if (!container.value || !cadStore.document || event.button !== 0) return
   const activeTool = cadStore.activeTool
   const drawingTool = isDrawingTool(activeTool)
+  const screenPoint = toLocalScreenPoint(event)
   const point = toSketchPoint(event, {
     allowEntitySnap: drawingTool,
     snapToGrid: drawingTool
   })
-  if (!point) return
-  cursorPoint.value = point
+  if (point) cursorPoint.value = point
 
   if (activeTool === 'arc') {
+    if (!point) return
     if (props.readonly) return
     if (!arcCenter.value) {
       arcCenter.value = point
@@ -432,6 +440,7 @@ function handlePointerDown(event: PointerEvent) {
   }
 
   if (drawingTool) {
+    if (!point) return
     if (props.readonly) return
     draftStart.value = point
     draftEntity.value = buildDraftEntity(activeTool, point, point)
@@ -446,40 +455,73 @@ function handlePointerDown(event: PointerEvent) {
     return
   }
 
-  const hit = hitTestEntity(point)
-  if (!hit) {
-    const featureId = sceneManager?.pickFeature(event.clientX, event.clientY)
-    const feature = featureId ? findFeature(featureId) : null
-    if (feature) {
-      if (event.shiftKey || event.ctrlKey || event.metaKey) {
-        cadStore.toggleFeatureSelection(feature.id)
-        dragState.value = null
-        return
-      }
-
-      const moveManyFeatures = cadStore.isFeatureSelected(feature.id)
-        && cadStore.selectedFeatures.length > 1
-        && cadStore.selectedFeatures.every((item) => isMovableFeature(item.feature))
-
-      if (!moveManyFeatures) {
-        cadStore.setSelection({ kind: 'feature', featureId: feature.id })
-      }
-      if (!props.readonly && isMovableFeature(feature)) {
-        dragState.value = {
-          pointerId: event.pointerId,
-          mode: moveManyFeatures ? 'feature-move-many' : 'feature-move',
-          startPoint: point,
-          featureId: feature.id,
-          originalFeature: cloneFeature(feature),
-          originalFeatures: moveManyFeatures
-            ? cadStore.selectedFeatures.map((item) => cloneFeature(item.feature))
-            : undefined
-        }
-        container.value.setPointerCapture(event.pointerId)
-      }
+  const featureId = sceneManager?.pickFeature(event.clientX, event.clientY)
+  const feature = featureId ? findFeature(featureId) : null
+  if (feature) {
+    if (event.shiftKey || event.ctrlKey || event.metaKey) {
+      cadStore.toggleFeatureSelection(feature.id)
+      dragState.value = null
       return
     }
-    const screenPoint = toLocalScreenPoint(event)
+
+    const moveManyFeatures = cadStore.isFeatureSelected(feature.id)
+      && cadStore.selectedFeatures.length > 1
+      && cadStore.selectedFeatures.every((item) => isMovableFeature(item.feature))
+    const rotateManyFeatures = event.altKey
+      && cadStore.isFeatureSelected(feature.id)
+      && cadStore.selectedFeatures.length > 1
+      && cadStore.selectedFeatures.every((item) => isRotatableFeature(item.feature))
+
+    if (!moveManyFeatures && !rotateManyFeatures) {
+      cadStore.setSelection({ kind: 'feature', featureId: feature.id })
+    }
+
+    const selectedForDrag = (moveManyFeatures || rotateManyFeatures)
+      ? cadStore.selectedFeatures.map((item) => cloneFeature(item.feature))
+      : undefined
+    if (!props.readonly && (event.altKey ? isRotatableFeature(feature) : isMovableFeature(feature))) {
+      const anchor = featureDragAnchor(feature)
+      const featureIds = (moveManyFeatures || rotateManyFeatures)
+        ? cadStore.selectedFeatures.map((item) => item.feature.id)
+        : [feature.id]
+      dragState.value = {
+        pointerId: event.pointerId,
+        mode: event.altKey
+          ? (rotateManyFeatures ? 'feature-rotate-many' : 'feature-rotate')
+          : (moveManyFeatures ? 'feature-move-many' : 'feature-move'),
+        startPoint: point ?? { x: 0, y: 0 },
+        startPoint3: sceneManager?.screenToCameraPlanePoint(event.clientX, event.clientY, anchor) ?? anchor,
+        screenStart: screenPoint,
+        featureId: feature.id,
+        originalFeature: cloneFeature(feature),
+        originalFeatures: selectedForDrag,
+        featureIds,
+        featureDelta: { x: 0, y: 0, z: 0 }
+      }
+      if (!event.altKey) {
+        sceneManager?.beginFeatureTransform(featureIds)
+      }
+      container.value.setPointerCapture(event.pointerId)
+    }
+    return
+  }
+
+  if (!point) {
+    selectionBox.value = { start: screenPoint, current: screenPoint }
+    dragState.value = {
+      pointerId: event.pointerId,
+      mode: 'box-select',
+      startPoint: { x: 0, y: 0 },
+      screenStart: screenPoint,
+      screenCurrent: screenPoint,
+      additive: event.shiftKey || event.ctrlKey || event.metaKey
+    }
+    container.value.setPointerCapture(event.pointerId)
+    return
+  }
+
+  const hit = hitTestEntity(point)
+  if (!hit) {
     selectionBox.value = { start: screenPoint, current: screenPoint }
     dragState.value = {
       pointerId: event.pointerId,
@@ -530,6 +572,35 @@ function handlePointerMove(event: PointerEvent) {
   collaborationStore.sendCursor(event.clientX - rect.left, event.clientY - rect.top)
 
   const drag = dragState.value
+
+  if (drag?.mode === 'feature-move' && drag.featureId && drag.originalFeature && drag.startPoint3) {
+    const point3 = sceneManager?.screenToCameraPlanePoint(event.clientX, event.clientY, drag.startPoint3)
+    if (!point3) return
+    const delta = subtractPoint3(point3, drag.startPoint3)
+    drag.featureDelta = delta
+    sceneManager?.previewFeatureTranslation(delta)
+    return
+  }
+
+  if (drag?.mode === 'feature-move-many' && drag.originalFeatures && drag.startPoint3) {
+    const point3 = sceneManager?.screenToCameraPlanePoint(event.clientX, event.clientY, drag.startPoint3)
+    if (!point3) return
+    const delta = subtractPoint3(point3, drag.startPoint3)
+    drag.featureDelta = delta
+    sceneManager?.previewFeatureTranslation(delta)
+    return
+  }
+
+  if (drag?.mode === 'feature-rotate' && drag.featureId && drag.originalFeature && drag.screenStart) {
+    cadStore.rotateFeatureTransient(drag.featureId, drag.originalFeature, rotationDeltaFromPointer(event, drag.screenStart))
+    return
+  }
+
+  if (drag?.mode === 'feature-rotate-many' && drag.originalFeatures && drag.screenStart) {
+    cadStore.rotateFeaturesTransient(drag.originalFeatures, rotationDeltaFromPointer(event, drag.screenStart))
+    return
+  }
+
   let point = toSketchPoint(event, pointOptionsForDrag(drag))
   if (!point) return
   if (drag) {
@@ -552,22 +623,6 @@ function handlePointerMove(event: PointerEvent) {
   if (drag.mode === 'draw' && drag.tool) {
     draftEntity.value = buildDraftEntity(drag.tool, drag.startPoint, point, drag.arcCenter)
     refreshScene()
-    return
-  }
-
-  if (drag.mode === 'feature-move' && drag.featureId && drag.originalFeature) {
-    cadStore.translateFeatureTransient(drag.featureId, drag.originalFeature, {
-      x: point.x - drag.startPoint.x,
-      y: point.y - drag.startPoint.y
-    })
-    return
-  }
-
-  if (drag.mode === 'feature-move-many' && drag.originalFeatures) {
-    cadStore.translateFeaturesTransient(drag.originalFeatures, {
-      x: point.x - drag.startPoint.x,
-      y: point.y - drag.startPoint.y
-    })
     return
   }
 
@@ -613,7 +668,7 @@ function handlePointerUp(event: PointerEvent) {
 
   if (drag.mode === 'box-select') {
     const point = toSketchPoint(event, pointOptionsForDrag(drag)) ?? drag.startPoint
-    finishBoxSelect(drag.startPoint, point, drag.additive ?? false)
+    finishBoxSelect(drag.startPoint, point, drag.screenStart, drag.screenCurrent, drag.additive ?? false)
   }
 
   if (drag.mode === 'move-many' && drag.originalEntities) {
@@ -634,13 +689,30 @@ function handlePointerUp(event: PointerEvent) {
   }
 
   if (drag.mode === 'feature-move' && drag.featureId && drag.originalFeature) {
+    cadStore.commitFeatureUpdate(
+      drag.originalFeature,
+      translateFeatureForDrag(drag.originalFeature, drag.featureDelta ?? { x: 0, y: 0, z: 0 })
+    )
+  }
+
+  if (drag.mode === 'feature-move-many' && drag.originalFeatures) {
+    const delta = drag.featureDelta ?? { x: 0, y: 0, z: 0 }
+    cadStore.commitFeaturesUpdate(
+      drag.originalFeatures.map((beforeFeature) => ({
+        before: beforeFeature,
+        after: translateFeatureForDrag(beforeFeature, delta)
+      }))
+    )
+  }
+
+  if (drag.mode === 'feature-rotate' && drag.featureId && drag.originalFeature) {
     const afterFeature = findFeature(drag.featureId)
     if (afterFeature) {
       cadStore.commitFeatureUpdate(drag.originalFeature, cloneFeature(afterFeature))
     }
   }
 
-  if (drag.mode === 'feature-move-many' && drag.originalFeatures) {
+  if (drag.mode === 'feature-rotate-many' && drag.originalFeatures) {
     const updates = drag.originalFeatures.flatMap((beforeFeature) => {
       const afterFeature = findFeature(beforeFeature.id)
       return afterFeature
@@ -650,7 +722,9 @@ function handlePointerUp(event: PointerEvent) {
     cadStore.commitFeaturesUpdate(updates)
   }
 
-  clearDrag(event.pointerId)
+  const preserveFeaturePreview = drag.mode === 'feature-move' || drag.mode === 'feature-move-many'
+  clearDrag(event.pointerId, !preserveFeaturePreview)
+  if (preserveFeaturePreview) refreshScene()
 }
 
 function handlePointerCancel(event: PointerEvent) {
@@ -661,10 +735,13 @@ function handlePointerCancel(event: PointerEvent) {
   if (drag?.mode === 'move-many' && drag.originalEntities) {
     cadStore.updateSketchEntitiesTransient(drag.originalEntities)
   }
-  if (drag?.mode === 'feature-move' && drag.originalFeature) {
+  if (drag?.mode === 'feature-move' || drag?.mode === 'feature-move-many') {
+    sceneManager?.endFeatureTransform(true)
+  }
+  if (drag?.mode === 'feature-rotate' && drag.originalFeature) {
     cadStore.updateFeatureTransient(drag.originalFeature)
   }
-  if (drag?.mode === 'feature-move-many' && drag.originalFeatures) {
+  if (drag?.mode === 'feature-rotate-many' && drag.originalFeatures) {
     cadStore.updateFeaturesTransient(drag.originalFeatures.map((feature) => ({ feature })))
   }
   if (drag?.tool === 'arc') {
@@ -673,9 +750,12 @@ function handlePointerCancel(event: PointerEvent) {
   clearDrag(event.pointerId)
 }
 
-function clearDrag(pointerId: number) {
+function clearDrag(pointerId: number, resetFeaturePreview = true) {
   if (container.value?.hasPointerCapture(pointerId)) {
     container.value.releasePointerCapture(pointerId)
+  }
+  if (isFeatureTranslationDrag(dragState.value)) {
+    sceneManager?.endFeatureTransform(resetFeaturePreview)
   }
   dragState.value = null
   draftStart.value = null
@@ -921,11 +1001,20 @@ function applyQuickArc() {
   })
 }
 
-function finishBoxSelect(start: Point2, end: Point2, additive: boolean) {
-  if (!cadStore.document || distance(start, end) < 1) {
+function finishBoxSelect(start: Point2, end: Point2, screenStart: Point2 | undefined, screenEnd: Point2 | undefined, additive: boolean) {
+  const screenDistance = screenStart && screenEnd ? distance(screenStart, screenEnd) : 0
+  if (!cadStore.document || (distance(start, end) < 1 && screenDistance < 2)) {
     if (!additive) cadStore.setSelection(null)
     return
   }
+
+  const selectedFeatureIds = screenStart && screenEnd ? sceneManager?.getFeaturesInScreenBox(screenStart, screenEnd) ?? [] : []
+  if (selectedFeatureIds.length > 0) {
+    const existing = additive ? cadStore.selectedFeatures.map((item) => item.feature.id) : []
+    cadStore.setFeatureSelection([...existing, ...selectedFeatureIds])
+    return
+  }
+
   const selected = getEntitiesInBox(start, end)
   const existing = additive
     ? cadStore.selectedSketchEntities.map((item) => ({ sketchId: item.sketchId, entityId: item.entity.id }))
@@ -1324,7 +1413,63 @@ function findFeature(featureId: string): Feature | null {
 }
 
 function isMovableFeature(feature: Feature): boolean {
-  return feature.type === 'box' || feature.type === 'sphere' || feature.type === 'cone'
+  return !feature.locked && !feature.suppressed
+}
+
+function isRotatableFeature(feature: Feature): boolean {
+  return isMovableFeature(feature)
+}
+
+function isFeatureTranslationDrag(drag: DragState | null): boolean {
+  return drag?.mode === 'feature-move' || drag?.mode === 'feature-move-many'
+}
+
+function translateFeatureForDrag<T extends Feature>(feature: T, delta: Point3): T {
+  const current = feature.position ?? { x: 0, y: 0, z: 0 }
+  return {
+    ...cloneFeature(feature),
+    position: {
+      x: roundDragValue(current.x + delta.x),
+      y: roundDragValue(current.y + delta.y),
+      z: roundDragValue(current.z + delta.z)
+    }
+  } as T
+}
+
+function roundDragValue(value: number): number {
+  return Math.round(value * 1000) / 1000
+}
+
+function featureDragAnchor(feature: Feature): Point3 {
+  const sceneCenter = sceneManager?.getFeatureWorldCenter(feature.id)
+  if (sceneCenter) return sceneCenter
+  if (feature.type === 'box') {
+    return { x: feature.position.x, y: feature.position.y, z: feature.position.z + feature.height / 2 }
+  }
+  if (feature.type === 'sphere') {
+    return { x: feature.position.x, y: feature.position.y, z: feature.position.z + feature.radius }
+  }
+  if (feature.type === 'cone') {
+    return { x: feature.position.x, y: feature.position.y, z: feature.position.z + feature.height / 2 }
+  }
+  return { x: 0, y: 0, z: 0 }
+}
+
+function subtractPoint3(point: Point3, origin: Point3): Point3 {
+  return {
+    x: point.x - origin.x,
+    y: point.y - origin.y,
+    z: point.z - origin.z
+  }
+}
+
+function rotationDeltaFromPointer(event: PointerEvent, screenStart: Point2): Point3 {
+  const screen = toLocalScreenPoint(event)
+  return {
+    x: event.shiftKey ? roundNumber((screen.y - screenStart.y) * 0.5) : 0,
+    y: event.shiftKey ? 0 : roundNumber((screen.y - screenStart.y) * 0.5),
+    z: roundNumber((screen.x - screenStart.x) * 0.5)
+  }
 }
 
 function cloneEntity<T extends SketchEntity>(entity: T): T {
@@ -1332,7 +1477,11 @@ function cloneEntity<T extends SketchEntity>(entity: T): T {
 }
 
 function cloneFeature<T extends Feature>(feature: T): T {
-  return JSON.parse(JSON.stringify(feature)) as T
+  return {
+    ...feature,
+    position: feature.position ? { ...feature.position } : undefined,
+    rotation: feature.rotation ? { ...feature.rotation } : undefined
+  } as T
 }
 
 function toLocalScreenPoint(event: PointerEvent): Point2 {

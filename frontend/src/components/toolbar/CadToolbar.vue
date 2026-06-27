@@ -82,9 +82,30 @@
             <el-dropdown-item @click="openSphereDialog">球体</el-dropdown-item>
             <el-dropdown-item @click="openConeDialog">锥体</el-dropdown-item>
             <el-dropdown-item divided @click="setTool('extrude')">拉伸</el-dropdown-item>
-            <el-dropdown-item :disabled="!canRunCut" @click="setTool('cut')">Cut</el-dropdown-item>
-            <el-dropdown-item :disabled="!canRunBoolean" @click="setTool('union')">Union</el-dropdown-item>
-            <el-dropdown-item :disabled="!canRunBoolean" @click="setTool('difference')">Difference</el-dropdown-item>
+            <el-dropdown-item :disabled="!canOpenCutDialog" @click="openCutDialog">切除</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+      <el-dropdown trigger="click" :disabled="readonly">
+        <el-button size="small" :disabled="readonly">布尔</el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item :disabled="!canRunBoolean" @click="setTool('booleanAdd')">布尔加</el-dropdown-item>
+            <el-dropdown-item :disabled="!canOpenBooleanSubtractDialog" @click="openBooleanSubtractDialog">布尔减</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+      <el-dropdown trigger="click" :disabled="readonly">
+        <el-button size="small" :disabled="readonly">装配</el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item :disabled="!canRunAssembly" @click="cadStore.applyAssemblyAlign('all')">中心重合</el-dropdown-item>
+            <el-dropdown-item :disabled="!canRunAssembly" @click="cadStore.applyAssemblyAlign('x')">X 中心对齐</el-dropdown-item>
+            <el-dropdown-item :disabled="!canRunAssembly" @click="cadStore.applyAssemblyAlign('y')">Y 中心对齐</el-dropdown-item>
+            <el-dropdown-item :disabled="!canRunAssembly" @click="cadStore.applyAssemblyAlign('z')">Z 中心对齐</el-dropdown-item>
+            <el-dropdown-item divided :disabled="!canRunAssembly" @click="cadStore.applyAssemblyMateZ()">Z 面贴合</el-dropdown-item>
+            <el-dropdown-item :disabled="!canRunAssembly" @click="openAssemblyDistanceDialog">轴向距离</el-dropdown-item>
+            <el-dropdown-item divided :disabled="!cadStore.hasFeatureSelection" @click="cadStore.toggleSelectedFeatureFixed()">固定/解除固定</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
@@ -95,6 +116,7 @@
             <el-dropdown-item :disabled="!cadStore.hasSketchEntitySelection" @click="cadStore.duplicateSelection()">复制</el-dropdown-item>
             <el-dropdown-item :disabled="!cadStore.hasSketchEntitySelection" @click="cadStore.toggleSelectionConstruction()">构造切换</el-dropdown-item>
             <el-dropdown-item :disabled="!cadStore.hasSketchEntitySelection" @click="openRotateDialog">旋转</el-dropdown-item>
+            <el-dropdown-item :disabled="!canRotateFeatures" @click="openFeatureRotateDialog">三维旋转</el-dropdown-item>
             <el-dropdown-item :disabled="!cadStore.hasSketchEntitySelection" @click="cadStore.mirrorSelection('horizontal')">水平镜像</el-dropdown-item>
             <el-dropdown-item :disabled="!cadStore.hasSketchEntitySelection" @click="cadStore.mirrorSelection('vertical')">垂直镜像</el-dropdown-item>
             <el-dropdown-item :disabled="cadStore.selectedSketchEntities.length < 2" @click="cadStore.mirrorSelectionByLine()">按线镜像</el-dropdown-item>
@@ -114,6 +136,8 @@
       <el-button size="small" @click="$emit('versions')">版本</el-button>
       <el-button size="small" @click="$emit('export-svg')">SVG</el-button>
       <el-button size="small" @click="$emit('export-dxf')">DXF</el-button>
+      <el-button size="small" @click="$emit('export-stl')">STL</el-button>
+      <el-button size="small" @click="$emit('export-glb')">GLB</el-button>
       <el-button size="small" @click="helpDialogVisible = true">帮助</el-button>
     </div>
 
@@ -161,6 +185,74 @@
         <el-button size="small" type="primary" @click="applyCone">创建</el-button>
       </template>
     </el-dialog>
+    <el-dialog v-model="cutDialogVisible" title="草图切除" width="360px" append-to-body>
+      <el-form label-position="top" size="small" class="transform-form">
+        <el-form-item label="主体实体">
+          <el-select v-model="cutTargetFeatureId" class="full-width" placeholder="选择被切除的实体">
+            <el-option
+              v-for="feature in cutTargetOptions"
+              :key="feature.id"
+              :label="feature.name"
+              :value="feature.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="切除草图">
+          <el-select v-model="cutProfileKey" class="full-width" placeholder="选择矩形或圆草图">
+            <el-option
+              v-for="profile in cutProfileOptions"
+              :key="profile.key"
+              :label="profile.label"
+              :value="profile.key"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="切除深度">
+          <el-input-number v-model="cutDepth" :min="1" :max="2000" :step="5" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="cutDialogVisible = false">取消</el-button>
+        <el-button size="small" type="primary" :disabled="!cutTargetFeatureId || !cutProfileKey" @click="applyCut">
+          应用
+        </el-button>
+      </template>
+    </el-dialog>
+    <el-dialog v-model="booleanSubtractDialogVisible" title="布尔减" width="360px" append-to-body>
+      <el-form label-position="top" size="small" class="transform-form">
+        <el-form-item label="主体 A">
+          <el-select v-model="booleanSubtractTargetId" class="full-width" placeholder="选择被减的主体">
+            <el-option
+              v-for="feature in booleanFeatureOptions"
+              :key="feature.id"
+              :label="feature.name"
+              :value="feature.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="客体 B">
+          <el-select v-model="booleanSubtractToolId" class="full-width" placeholder="选择用于相减的客体">
+            <el-option
+              v-for="feature in booleanFeatureOptions"
+              :key="feature.id"
+              :label="feature.name"
+              :value="feature.id"
+            />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="booleanSubtractDialogVisible = false">取消</el-button>
+        <el-button
+          size="small"
+          type="primary"
+          :disabled="!booleanSubtractTargetId || !booleanSubtractToolId || booleanSubtractTargetId === booleanSubtractToolId"
+          @click="applyBooleanSubtract"
+        >
+          应用
+        </el-button>
+      </template>
+    </el-dialog>
     <el-dialog v-model="rotateDialogVisible" title="旋转" width="320px" append-to-body @closed="clearTransformPreview">
       <el-form label-position="top" size="small">
         <el-form-item label="角度">
@@ -170,6 +262,43 @@
       <template #footer>
         <el-button size="small" @click="closeRotateDialog">取消</el-button>
         <el-button size="small" type="primary" @click="applyRotate">应用</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="featureRotateDialogVisible" title="三维旋转" width="340px" append-to-body>
+      <el-form label-position="top" size="small" class="transform-form">
+        <el-form-item label="绕 X 轴">
+          <el-input-number v-model="featureRotateX" :min="-360" :max="360" :step="15" />
+        </el-form-item>
+        <el-form-item label="绕 Y 轴">
+          <el-input-number v-model="featureRotateY" :min="-360" :max="360" :step="15" />
+        </el-form-item>
+        <el-form-item label="绕 Z 轴">
+          <el-input-number v-model="featureRotateZ" :min="-360" :max="360" :step="15" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="featureRotateDialogVisible = false">取消</el-button>
+        <el-button size="small" type="primary" @click="applyFeatureRotate">应用</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="assemblyDistanceDialogVisible" title="轴向距离约束" width="340px" append-to-body>
+      <el-form label-position="top" size="small" class="transform-form">
+        <el-form-item label="轴向">
+          <el-select v-model="assemblyDistanceAxis">
+            <el-option label="X" value="x" />
+            <el-option label="Y" value="y" />
+            <el-option label="Z" value="z" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="距离">
+          <el-input-number v-model="assemblyDistance" :min="-1000" :max="1000" :step="5" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="assemblyDistanceDialogVisible = false">取消</el-button>
+        <el-button size="small" type="primary" @click="applyAssemblyDistance">应用</el-button>
       </template>
     </el-dialog>
 
@@ -250,7 +379,7 @@ import { computed, ref, watch } from 'vue'
 import { useCadStore, type CadToolType } from '@/stores/cad.store'
 import { sketchAngleStepOptions, sketchGridSizeOptions } from '@/cad/geometry/sketchSnapSettings'
 import { createLineChamfer, createLineFillet } from '@/cad/geometry/sketchCornerOperations'
-import type { LineEntity, SketchPlane } from '@/cad/model/document'
+import type { LineEntity, SketchEntity, SketchPlane } from '@/cad/model/document'
 import {
   createOffsetPreviewEntities,
   createRectangularArrayPreviewEntities,
@@ -264,6 +393,8 @@ defineEmits<{
   versions: []
   'export-svg': []
   'export-dxf': []
+  'export-stl': []
+  'export-glb': []
   view: [command: 'top' | 'front' | 'right' | 'isometric' | 'fit']
 }>()
 const cadStore = useCadStore()
@@ -271,7 +402,11 @@ const readonly = computed(() => props.role === 'VIEWER')
 const boxDialogVisible = ref(false)
 const sphereDialogVisible = ref(false)
 const coneDialogVisible = ref(false)
+const cutDialogVisible = ref(false)
+const booleanSubtractDialogVisible = ref(false)
 const rotateDialogVisible = ref(false)
+const featureRotateDialogVisible = ref(false)
+const assemblyDistanceDialogVisible = ref(false)
 const arrayDialogVisible = ref(false)
 const offsetDialogVisible = ref(false)
 const filletDialogVisible = ref(false)
@@ -283,7 +418,17 @@ const boxHeight = ref(30)
 const sphereRadius = ref(25)
 const coneBaseRadius = ref(25)
 const coneHeight = ref(50)
+const cutDepth = ref(40)
+const cutTargetFeatureId = ref('')
+const cutProfileKey = ref('')
+const booleanSubtractTargetId = ref('')
+const booleanSubtractToolId = ref('')
 const rotateDegrees = ref(90)
+const featureRotateX = ref(0)
+const featureRotateY = ref(0)
+const featureRotateZ = ref(90)
+const assemblyDistanceAxis = ref<'x' | 'y' | 'z'>('x')
+const assemblyDistance = ref(20)
 const arrayColumns = ref(3)
 const arrayRows = ref(2)
 const arraySpacingX = ref(30)
@@ -321,17 +466,27 @@ const constructionModeModel = computed({
   set: (value: boolean) => cadStore.setConstructionMode(value)
 })
 const canModifyLineCorner = computed(() => selectedLinePair() !== null)
-const canRunBoolean = computed(() => cadStore.selectedFeatures.length >= 2 || (cadStore.document?.features.length ?? 0) >= 2)
-const canRunCut = computed(() => {
-  if (cadStore.selectedFeatures.length >= 2) return true
-  const selected = cadStore.selectedSketchEntity
-  return Boolean(
-    selected
-    && !selected.construction
-    && (selected.type === 'rectangle' || selected.type === 'circle')
-    && (cadStore.document?.features.length ?? 0) > 0
+const canRunBoolean = computed(() => cadStore.selectedFeatures.length >= 2)
+const booleanFeatureOptions = computed(() => (cadStore.document?.features ?? []).filter((feature) => !feature.suppressed))
+const cutTargetOptions = computed(() => (cadStore.document?.features ?? []).filter((feature) => !feature.suppressed))
+const cutProfileOptions = computed(() => {
+  const document = cadStore.document
+  if (!document) return []
+  return document.sketches.flatMap((sketch) =>
+    sketch.entities
+      .filter(isCutProfile)
+      .map((entity) => ({
+        key: `${sketch.id}:${entity.id}`,
+        sketchId: sketch.id,
+        entityId: entity.id,
+        label: `${sketch.name} / ${entity.name}`
+      }))
   )
 })
+const canOpenCutDialog = computed(() => cutTargetOptions.value.length > 0 && cutProfileOptions.value.length > 0)
+const canOpenBooleanSubtractDialog = computed(() => booleanFeatureOptions.value.length >= 2)
+const canRunAssembly = computed(() => cadStore.selectedFeatures.length >= 2)
+const canRotateFeatures = computed(() => cadStore.selectedFeatures.some((item) => !item.feature.locked && !item.feature.suppressed))
 
 function selectedLinePair(): [LineEntity, LineEntity] | null {
   if (cadStore.selectedSketchEntities.length !== 2) return null
@@ -375,6 +530,47 @@ function applyCone() {
   cadStore.addConePrimitive(coneBaseRadius.value, coneHeight.value)
   coneDialogVisible.value = false
 }
+
+function isCutProfile(entity: SketchEntity): boolean {
+  return !entity.construction && (entity.type === 'rectangle' || entity.type === 'circle')
+}
+
+function openCutDialog() {
+  const selectedTarget = cadStore.selectedFeatures[0]?.feature
+  const fallbackTarget = [...cutTargetOptions.value].reverse()[0]
+  cutTargetFeatureId.value = selectedTarget && !selectedTarget.suppressed
+    ? selectedTarget.id
+    : fallbackTarget?.id ?? ''
+  const selectedEntity = cadStore.selectedSketchEntity
+  const selectedProfile = selectedEntity && isCutProfile(selectedEntity)
+    ? cutProfileOptions.value.find((profile) => profile.entityId === selectedEntity.id)
+    : null
+  cutProfileKey.value = selectedProfile?.key ?? cutProfileOptions.value[0]?.key ?? ''
+  cutDialogVisible.value = true
+}
+
+function applyCut() {
+  const profile = cutProfileOptions.value.find((item) => item.key === cutProfileKey.value)
+  if (!profile || !cutTargetFeatureId.value) return
+  cadStore.createSketchCut(cutTargetFeatureId.value, profile.sketchId, profile.entityId, cutDepth.value)
+  cutDialogVisible.value = false
+}
+
+function openBooleanSubtractDialog() {
+  const selected = cadStore.selectedFeatures.map((item) => item.feature).filter((feature) => !feature.suppressed)
+  booleanSubtractTargetId.value = selected[0]?.id ?? booleanFeatureOptions.value[0]?.id ?? ''
+  booleanSubtractToolId.value = selected.find((feature) => feature.id !== booleanSubtractTargetId.value)?.id
+    ?? booleanFeatureOptions.value.find((feature) => feature.id !== booleanSubtractTargetId.value)?.id
+    ?? ''
+  booleanSubtractDialogVisible.value = true
+}
+
+function applyBooleanSubtract() {
+  if (!booleanSubtractTargetId.value || !booleanSubtractToolId.value || booleanSubtractTargetId.value === booleanSubtractToolId.value) return
+  cadStore.booleanSelected('subtract', booleanSubtractTargetId.value, booleanSubtractToolId.value)
+  booleanSubtractDialogVisible.value = false
+}
+
 function openRotateDialog() {
   rotateDialogVisible.value = true
   updateRotatePreview()
@@ -388,6 +584,28 @@ function closeRotateDialog() {
 function applyRotate() {
   cadStore.rotateSelection(rotateDegrees.value)
   closeRotateDialog()
+}
+
+function openFeatureRotateDialog() {
+  featureRotateDialogVisible.value = true
+}
+
+function applyFeatureRotate() {
+  cadStore.rotateSelectedFeatures({
+    x: featureRotateX.value,
+    y: featureRotateY.value,
+    z: featureRotateZ.value
+  })
+  featureRotateDialogVisible.value = false
+}
+
+function openAssemblyDistanceDialog() {
+  assemblyDistanceDialogVisible.value = true
+}
+
+function applyAssemblyDistance() {
+  cadStore.applyAssemblyDistance(assemblyDistanceAxis.value, assemblyDistance.value)
+  assemblyDistanceDialogVisible.value = false
 }
 
 function openArrayDialog() {
@@ -556,6 +774,10 @@ watch(
 }
 
 .transform-form :deep(.el-input-number) {
+  width: 100%;
+}
+
+.full-width {
   width: 100%;
 }
 

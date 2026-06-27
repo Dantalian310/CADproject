@@ -3,7 +3,6 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Resolve-Path (Join-Path $scriptDir '..\..')
 $logs = Join-Path $root '.local\logs'
-$backendJar = Join-Path $root 'backend\target\cloudcad-backend-0.1.0-SNAPSHOT.jar'
 
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 
@@ -49,17 +48,12 @@ Write-Host 'Starting PostgreSQL...'
 & (Join-Path $scriptDir 'postgres-start.cmd')
 & (Join-Path $scriptDir 'postgres-init-db.cmd')
 
-if (-not (Test-Path $backendJar)) {
-    Write-Host 'Backend jar not found, building backend first...'
-    & (Join-Path $scriptDir 'backend-build.cmd')
-}
-
 if (Test-BackendReady) {
     Write-Host 'Backend is already running.'
 } else {
-    Write-Host 'Starting backend in background...'
+    Write-Host 'Starting backend in background with Maven Spring Boot dev mode...'
     Start-Process -WindowStyle Hidden -FilePath 'cmd.exe' `
-        -ArgumentList '/c', 'scripts\dev\backend-run-jar.cmd > .local\logs\backend.log 2>&1' `
+        -ArgumentList '/c', 'scripts\dev\backend-dev.cmd > .local\logs\backend.log 2>&1' `
         -WorkingDirectory $root
 }
 
@@ -72,7 +66,7 @@ if (Test-FrontendReady) {
         -WorkingDirectory $root
 }
 
-Wait-ServiceReady -Name 'Backend' -Probe ${function:Test-BackendReady} -TimeoutSeconds 60 | Out-Null
+Wait-ServiceReady -Name 'Backend' -Probe ${function:Test-BackendReady} -TimeoutSeconds 120 | Out-Null
 Wait-ServiceReady -Name 'Frontend' -Probe ${function:Test-FrontendReady} -TimeoutSeconds 30 | Out-Null
 & (Join-Path $scriptDir 'local-status.cmd')
 

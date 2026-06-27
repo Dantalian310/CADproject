@@ -23,6 +23,9 @@ public class DocumentEntity {
     @Column(nullable = false, length = 128)
     private String name;
 
+    @Column(columnDefinition = "text")
+    private String description;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "current_version_id")
     private DocumentVersionEntity currentVersion;
@@ -56,6 +59,8 @@ public class DocumentEntity {
     public void setProject(ProjectEntity project) { this.project = project; }
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
     public DocumentVersionEntity getCurrentVersion() { return currentVersion; }
     public void setCurrentVersion(DocumentVersionEntity currentVersion) { this.currentVersion = currentVersion; }
     public Integer getCurrentVersionNumber() { return currentVersionNumber; }

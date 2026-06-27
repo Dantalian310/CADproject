@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { getDocument, saveDocument } from '@/api/document.api'
-import type { CadDocument, Feature, Point2, Point3, Sketch, SketchConstraint, SketchEntity, SketchPlane } from '@/cad/model/document'
+import type { AssemblyConstraint, BooleanFeature, BooleanResultMesh, CadDocument, Feature, Point2, Point3, Sketch, SketchConstraint, SketchEntity, SketchPlane } from '@/cad/model/document'
 import { createEmptyCadDocument } from '@/cad/model/document'
 import { createCadId } from '@/cad/model/ids'
 import type { CadOperation, CadOperationType } from '@/cad/model/operation'
@@ -26,6 +26,7 @@ import {
   type RelationConstraintKind
 } from '@/cad/geometry/sketchConstraints'
 import { defaultSketchSnapSettings, type SketchSnapSettings } from '@/cad/geometry/sketchSnapSettings'
+import { ThreeGeometryKernel } from '@/cad/geometry/threeGeometryKernel'
 import type { CadCommand } from '@/cad/commands/command'
 import { HistoryStack } from '@/cad/commands/historyStack'
 import { useStatusStore } from './status.store'
@@ -49,6 +50,8 @@ export type CadToolType =
   | 'cut'
   | 'union'
   | 'difference'
+  | 'booleanAdd'
+  | 'booleanSubtract'
 
 interface CadState {
   document: CadDocument | null
@@ -66,6 +69,70 @@ interface CadState {
 
 function cloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
+}
+
+function cloneFeatureForTransform(feature: Feature): Feature {
+  return {
+    ...feature,
+    position: feature.position ? { ...feature.position } : undefined,
+    rotation: feature.rotation ? { ...feature.rotation } : undefined
+  } as Feature
+}
+
+function cloneDocumentWithFeature(document: CadDocument, feature: Feature): CadDocument | null {
+  let replaced = false
+  const features = document.features.map((item) => {
+    if (item.id !== feature.id) return item
+    replaced = true
+    return cloneFeatureForTransform(feature)
+  })
+  if (!replaced) return null
+  return {
+    ...document,
+    metadata: { ...document.metadata },
+    features
+  }
+}
+
+function cloneDocumentWithFeatures(document: CadDocument, updates: Array<{ feature: Feature }>): CadDocument | null {
+  const updateMap = new Map(updates.map((update) => [update.feature.id, update.feature]))
+  if (updateMap.size === 0) return null
+  let replaced = false
+  const features = document.features.map((item) => {
+    const update = updateMap.get(item.id)
+    if (!update) return item
+    replaced = true
+    return cloneFeatureForTransform(update)
+  })
+  if (!replaced) return null
+  return {
+    ...document,
+    metadata: { ...document.metadata },
+    features
+  }
+}
+
+function slimFeatureForComparison(feature: Feature): unknown {
+  if (feature.type === 'boolean') {
+    const { resultMesh, ...rest } = feature
+    return {
+      ...rest,
+      hasResultMesh: Boolean(resultMesh?.vertices.length)
+    }
+  }
+  if (feature.type === 'mesh') {
+    const { vertices, indices, ...rest } = feature
+    return {
+      ...rest,
+      vertexCount: vertices.length,
+      indexCount: indices?.length ?? 0
+    }
+  }
+  return feature
+}
+
+function featureChanged(before: Feature, after: Feature): boolean {
+  return JSON.stringify(slimFeatureForComparison(before)) !== JSON.stringify(slimFeatureForComparison(after))
 }
 
 function createSnapshotCommand(
@@ -303,9 +370,16 @@ function featureReferencesFeature(feature: Feature, featureId: string): boolean 
     return feature.targetFeatureId === featureId
   }
   if (feature.type === 'boolean') {
-    return feature.targetFeatureId === featureId || feature.toolFeatureId === featureId
+    const frozenSubtract = isFrozenBooleanSubtract(feature)
+    return feature.targetFeatureId === featureId || (!frozenSubtract && feature.toolFeatureId === featureId)
   }
   return false
+}
+
+function isFrozenBooleanSubtract(feature: Feature): boolean {
+  if (feature.type !== 'boolean') return false
+  const subtractOperation = feature.operation === 'subtract' || feature.operation === 'difference'
+  return subtractOperation && Boolean(feature.resultMesh?.vertices.length)
 }
 
 function removeDependentFeatures(document: CadDocument, deletedFeatureIds: Set<string>) {
@@ -348,16 +422,96 @@ function isPrimitiveFeature(feature: Feature): feature is Extract<Feature, { pos
   return feature.type === 'box' || feature.type === 'sphere' || feature.type === 'cone'
 }
 
-function translateFeature(feature: Feature, delta: Point2): Feature {
-  if (!isPrimitiveFeature(feature)) return cloneValue(feature)
+function isTransformableFeature(feature: Feature): boolean {
+  return feature.type === 'box'
+    || feature.type === 'sphere'
+    || feature.type === 'cone'
+    || feature.type === 'extrude'
+    || feature.type === 'cut'
+    || feature.type === 'boolean'
+    || feature.type === 'mesh'
+}
+
+function roundNumber(value: number): number {
+  return Math.round(value * 1000) / 1000
+}
+
+function roundPoint3(point: Point3): Point3 {
   return {
-    ...cloneValue(feature),
+    x: roundNumber(point.x),
+    y: roundNumber(point.y),
+    z: roundNumber(point.z)
+  }
+}
+
+function emptyRotation(): Point3 {
+  return { x: 0, y: 0, z: 0 }
+}
+
+function normalizeRotation(rotation: Point3): Point3 {
+  const normalize = (value: number) => {
+    const wrapped = ((value % 360) + 360) % 360
+    return roundNumber(wrapped > 180 ? wrapped - 360 : wrapped)
+  }
+  return {
+    x: normalize(rotation.x),
+    y: normalize(rotation.y),
+    z: normalize(rotation.z)
+  }
+}
+
+function translateFeature(feature: Feature, delta: Point3): Feature {
+  if (!isTransformableFeature(feature)) return cloneValue(feature)
+  const current = feature.position ?? { x: 0, y: 0, z: 0 }
+  return {
+    ...cloneFeatureForTransform(feature),
     position: {
-      ...feature.position,
-      x: Math.round((feature.position.x + delta.x) * 1000) / 1000,
-      y: Math.round((feature.position.y + delta.y) * 1000) / 1000
+      x: roundNumber(current.x + delta.x),
+      y: roundNumber(current.y + delta.y),
+      z: roundNumber(current.z + delta.z)
     }
   } as Feature
+}
+
+function rotateFeature(feature: Feature, delta: Point3): Feature {
+  if (!isTransformableFeature(feature)) return cloneValue(feature)
+  const current = feature.rotation ?? emptyRotation()
+  return {
+    ...cloneFeatureForTransform(feature),
+    rotation: normalizeRotation({
+      x: current.x + delta.x,
+      y: current.y + delta.y,
+      z: current.z + delta.z
+    })
+  } as Feature
+}
+
+function primitiveCenter(feature: Feature): Point3 | null {
+  if (!isPrimitiveFeature(feature)) return null
+  if (feature.type === 'box') {
+    return { x: feature.position.x, y: feature.position.y, z: feature.position.z + feature.height / 2 }
+  }
+  if (feature.type === 'sphere') {
+    return { x: feature.position.x, y: feature.position.y, z: feature.position.z + feature.radius }
+  }
+  return { x: feature.position.x, y: feature.position.y, z: feature.position.z + feature.height / 2 }
+}
+
+function primitiveBottom(feature: Feature): number | null {
+  if (!isPrimitiveFeature(feature)) return null
+  return feature.position.z
+}
+
+function primitiveTop(feature: Feature): number | null {
+  if (feature.type === 'box') return feature.position.z + feature.height
+  if (feature.type === 'sphere') return feature.position.z + feature.radius * 2
+  if (feature.type === 'cone') return feature.position.z + feature.height
+  return null
+}
+
+function ensureAssemblies(document: CadDocument): AssemblyConstraint[] {
+  if (!document.assemblies) document.assemblies = []
+  return document.assemblies
 }
 
 function replaceFeature(document: CadDocument, feature: Feature): boolean {
@@ -377,20 +531,44 @@ function findLatestTargetFeature(document: CadDocument): Feature | null {
 
 function createBooleanFeature(
   document: CadDocument,
-  operation: 'union' | 'difference',
+  operation: 'add' | 'subtract',
   target: Feature,
   tool: Feature,
-  namePrefix = operation === 'union' ? 'Union' : 'Difference'
-): Feature {
+  namePrefix = operation === 'add' ? '布尔加' : '布尔减',
+  resultMesh?: BooleanResultMesh
+): BooleanFeature {
   return {
     id: createCadId('boolean'),
     type: 'boolean',
     name: `${namePrefix} ${document.features.length + 1}`,
     suppressed: false,
     operation,
+    position: { x: 0, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
     targetFeatureId: target.id,
-    toolFeatureId: tool.id
+    toolFeatureId: tool.id,
+    ...(resultMesh ? { resultMesh } : {})
   }
+}
+
+function freezeBooleanSubtractFeature(document: CadDocument, feature: BooleanFeature): BooleanFeature {
+  if (feature.resultMesh?.vertices.length || (feature.operation !== 'subtract' && feature.operation !== 'difference')) {
+    return feature
+  }
+  const resultMesh = new ThreeGeometryKernel().buildBooleanResultMesh(document, feature)
+  return resultMesh ? { ...feature, resultMesh } : feature
+}
+
+function freezeBooleanSubtractFeatures(document: CadDocument): CadDocument {
+  let changed = false
+  const next = cloneValue(document)
+  next.features = next.features.map((feature) => {
+    if (feature.type !== 'boolean') return feature
+    const frozen = freezeBooleanSubtractFeature(next, feature)
+    if (frozen !== feature) changed = true
+    return frozen
+  })
+  return changed ? next : document
 }
 
 export const useCadStore = defineStore('cad', {
@@ -457,7 +635,8 @@ export const useCadStore = defineStore('cad', {
   actions: {
     async loadDocument(documentId: number) {
       const dto = await getDocument(documentId)
-      this.document = dto.snapshotJson ?? createEmptyCadDocument(String(dto.id), dto.name)
+      this.document = freezeBooleanSubtractFeatures(dto.snapshotJson ?? createEmptyCadDocument(String(dto.id), dto.name))
+      this.document.assemblies = this.document.assemblies ?? []
       this.currentVersion = dto.currentVersion
       this.dirty = false
       this.selection = null
@@ -495,8 +674,13 @@ export const useCadStore = defineStore('cad', {
         this.activeTool = 'select'
         return
       }
-      if (tool === 'union' || tool === 'difference') {
-        this.booleanSelected(tool)
+      if (tool === 'union' || tool === 'booleanAdd') {
+        this.booleanSelected('add')
+        this.activeTool = 'select'
+        return
+      }
+      if (tool === 'difference' || tool === 'booleanSubtract') {
+        this.booleanSelected('subtract')
         this.activeTool = 'select'
         return
       }
@@ -1242,6 +1426,7 @@ export const useCadStore = defineStore('cad', {
         name: `Box ${this.document.features.length + 1}`,
         suppressed: false,
         position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
         length: Math.max(1, length),
         width: Math.max(1, width),
         height: Math.max(1, height)
@@ -1263,6 +1448,7 @@ export const useCadStore = defineStore('cad', {
         name: `Sphere ${this.document.features.length + 1}`,
         suppressed: false,
         position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
         radius: Math.max(1, radius)
       }
       this.commitDocumentChange(
@@ -1282,6 +1468,7 @@ export const useCadStore = defineStore('cad', {
         name: `Cone ${this.document.features.length + 1}`,
         suppressed: false,
         position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
         baseRadius: Math.max(1, baseRadius),
         height: Math.max(1, height)
       }
@@ -1296,13 +1483,13 @@ export const useCadStore = defineStore('cad', {
     },
     updateFeatureTransient(feature: Feature) {
       if (!this.document) return
-      const draft = cloneValue(this.document)
-      if (!replaceFeature(draft, feature)) return
+      const draft = cloneDocumentWithFeature(this.document, feature)
+      if (!draft) return
       this.document = draft
       this.markDirty()
     },
     commitFeatureUpdate(beforeFeature: Feature, afterFeature: Feature) {
-      if (!this.document || JSON.stringify(beforeFeature) === JSON.stringify(afterFeature)) return
+      if (!this.document || !featureChanged(beforeFeature, afterFeature)) return
       this.commitDocumentChange(
         'feature.updated',
         afterFeature.id,
@@ -1313,16 +1500,14 @@ export const useCadStore = defineStore('cad', {
     },
     updateFeaturesTransient(updates: Array<{ feature: Feature }>) {
       if (!this.document || updates.length === 0) return
-      const draft = cloneValue(this.document)
-      for (const update of updates) {
-        replaceFeature(draft, update.feature)
-      }
+      const draft = cloneDocumentWithFeatures(this.document, updates)
+      if (!draft) return
       this.document = draft
       this.markDirty()
     },
     commitFeaturesUpdate(updates: FeatureUpdate[]) {
       if (!this.document) return
-      const effectiveUpdates = updates.filter((update) => JSON.stringify(update.before) !== JSON.stringify(update.after))
+      const effectiveUpdates = updates.filter((update) => featureChanged(update.before, update.after))
       if (effectiveUpdates.length === 0) return
       const before = cloneValue(this.document)
       const after = cloneValue(this.document)
@@ -1342,16 +1527,38 @@ export const useCadStore = defineStore('cad', {
       this.markDirty()
       this.broadcastOperation('feature.updated', 'selection', { updates: effectiveUpdates })
     },
-    translateFeatureTransient(featureId: string, beforeFeature: Feature, delta: Point2) {
-      if (!this.document || !isPrimitiveFeature(beforeFeature)) return
+    translateFeatureTransient(featureId: string, beforeFeature: Feature, delta: Point3) {
+      if (!this.document || !isTransformableFeature(beforeFeature)) return
       this.updateFeatureTransient(translateFeature(beforeFeature, delta))
       this.selection = { kind: 'feature', featureId }
     },
-    translateFeaturesTransient(beforeFeatures: Feature[], delta: Point2) {
-      if (!this.document || beforeFeatures.length === 0 || beforeFeatures.some((feature) => !isPrimitiveFeature(feature))) return
+    translateFeaturesTransient(beforeFeatures: Feature[], delta: Point3) {
+      if (!this.document || beforeFeatures.length === 0 || beforeFeatures.some((feature) => !isTransformableFeature(feature))) return
       const translated = beforeFeatures.map((feature) => ({ feature: translateFeature(feature, delta) }))
       this.updateFeaturesTransient(translated)
       this.selection = normalizeFeatureSelection(beforeFeatures.map((feature) => feature.id))
+    },
+    rotateFeatureTransient(featureId: string, beforeFeature: Feature, delta: Point3) {
+      if (!this.document || !isTransformableFeature(beforeFeature)) return
+      this.updateFeatureTransient(rotateFeature(beforeFeature, delta))
+      this.selection = { kind: 'feature', featureId }
+    },
+    rotateFeaturesTransient(beforeFeatures: Feature[], delta: Point3) {
+      if (!this.document || beforeFeatures.length === 0 || beforeFeatures.some((feature) => !isTransformableFeature(feature))) return
+      const rotated = beforeFeatures.map((feature) => ({ feature: rotateFeature(feature, delta) }))
+      this.updateFeaturesTransient(rotated)
+      this.selection = normalizeFeatureSelection(beforeFeatures.map((feature) => feature.id))
+    },
+    rotateSelectedFeatures(delta: Point3) {
+      if (!this.document || this.selectedFeatures.length === 0) return
+      const selected = this.selectedFeatures.map((item) => item.feature).filter(isTransformableFeature)
+      if (selected.length === 0) return
+      this.commitFeaturesUpdate(
+        selected.map((feature) => ({
+          before: cloneValue(feature),
+          after: rotateFeature(feature, delta)
+        }))
+      )
     },
     extrudeSelected(depth = 30) {
       if (!this.document || this.selection?.kind !== 'sketch-entity') return
@@ -1367,7 +1574,9 @@ export const useCadStore = defineStore('cad', {
         sourceSketchId: sketch.id,
         sourceEntityId: entity.id,
         depth,
-        operation: 'new'
+        operation: 'new',
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 }
       }
       this.commitDocumentChange(
         'feature.created',
@@ -1382,7 +1591,7 @@ export const useCadStore = defineStore('cad', {
       const selectedFeatures = this.selectedFeatures.map((item) => item.feature)
       if (selectedFeatures.length >= 2) {
         const [target, tool] = selectedFeatures
-        const feature = createBooleanFeature(this.document, 'difference', target, tool, 'Cut')
+        const feature = createBooleanFeature(this.document, 'subtract', target, tool, '布尔减')
         this.commitDocumentChange(
           'feature.created',
           feature.id,
@@ -1394,20 +1603,28 @@ export const useCadStore = defineStore('cad', {
       }
       if (this.selection?.kind !== 'sketch-entity') return
       const selection = this.selection
-      const sketch = this.document.sketches.find((item) => item.id === selection.sketchId)
-      const entity = sketch?.entities.find((item) => item.id === selection.entityId)
-      if (!sketch || !entity || entity.construction || (entity.type !== 'rectangle' && entity.type !== 'circle')) return
       const targetFeature = findLatestTargetFeature(this.document)
       if (!targetFeature) return
+      this.createSketchCut(targetFeature.id, selection.sketchId, selection.entityId, depth)
+    },
+    createSketchCut(targetFeatureId: string, sketchId: string, entityId: string, depth = 30) {
+      if (!this.document || this.document.features.length === 0) return
+      const targetFeature = this.document.features.find((item) => item.id === targetFeatureId && !item.suppressed)
+      if (!targetFeature) return
+      const sketch = this.document.sketches.find((item) => item.id === sketchId)
+      const entity = sketch?.entities.find((item) => item.id === entityId)
+      if (!sketch || !entity || entity.construction || (entity.type !== 'rectangle' && entity.type !== 'circle')) return
       const feature: Feature = {
         id: createCadId('cut'),
         type: 'cut',
-        name: `Cut ${this.document.features.length + 1}`,
+        name: `切除 ${this.document.features.length + 1}`,
         suppressed: false,
         targetFeatureId: targetFeature.id,
         toolSketchId: sketch.id,
         toolEntityId: entity.id,
-        depth
+        depth: Math.max(1, depth),
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 }
       }
       this.commitDocumentChange(
         'feature.created',
@@ -1417,14 +1634,17 @@ export const useCadStore = defineStore('cad', {
         { kind: 'feature', featureId: feature.id }
       )
     },
-    booleanSelected(operation: 'union' | 'difference') {
+    booleanSelected(operation: 'add' | 'subtract', targetFeatureId?: string, toolFeatureId?: string) {
       if (!this.document || this.document.features.length < 2) return
       const selectedFeatures = this.selectedFeatures.map((item) => item.feature)
-      const [target, tool] = selectedFeatures.length >= 2
-        ? selectedFeatures
-        : this.document.features.slice(-2)
+      const target = targetFeatureId
+        ? this.document.features.find((feature) => feature.id === targetFeatureId)
+        : selectedFeatures[0]
+      const tool = toolFeatureId
+        ? this.document.features.find((feature) => feature.id === toolFeatureId)
+        : selectedFeatures[1]
       if (!target || !tool || target.id === tool.id) return
-      const feature = createBooleanFeature(this.document, operation, target, tool)
+      const feature = freezeBooleanSubtractFeature(this.document, createBooleanFeature(this.document, operation, target, tool))
       this.commitDocumentChange(
         'feature.created',
         feature.id,
@@ -1432,6 +1652,132 @@ export const useCadStore = defineStore('cad', {
         (draft) => draft.features.push(cloneValue(feature)),
         { kind: 'feature', featureId: feature.id }
       )
+    },
+    applyAssemblyAlign(axis: 'x' | 'y' | 'z' | 'all') {
+      if (!this.document || this.selectedFeatures.length < 2) return
+      const [target, source] = this.selectedFeatures.map((item) => item.feature)
+      const targetCenter = primitiveCenter(target)
+      const sourceCenter = primitiveCenter(source)
+      if (!targetCenter || !sourceCenter) return
+      const delta: Point3 = {
+        x: axis === 'x' || axis === 'all' ? targetCenter.x - sourceCenter.x : 0,
+        y: axis === 'y' || axis === 'all' ? targetCenter.y - sourceCenter.y : 0,
+        z: axis === 'z' || axis === 'all' ? targetCenter.z - sourceCenter.z : 0
+      }
+      const afterSource = translateFeature(source, delta)
+      const constraint: AssemblyConstraint = {
+        id: createCadId('asm'),
+        type: 'align',
+        axis,
+        sourceFeatureId: source.id,
+        targetFeatureId: target.id
+      }
+      this.commitDocumentChange(
+        'feature.updated',
+        source.id,
+        { before: source, feature: afterSource, assemblyConstraint: constraint },
+        (draft) => {
+          replaceFeature(draft, afterSource)
+          ensureAssemblies(draft).push(cloneValue(constraint))
+        },
+        normalizeFeatureSelection([target.id, source.id])
+      )
+    },
+    applyAssemblyMateZ() {
+      if (!this.document || this.selectedFeatures.length < 2) return
+      const [base, mate] = this.selectedFeatures.map((item) => item.feature)
+      const baseTop = primitiveTop(base)
+      const mateBottom = primitiveBottom(mate)
+      if (baseTop === null || mateBottom === null) return
+      const afterMate = translateFeature(mate, { x: 0, y: 0, z: baseTop - mateBottom })
+      const constraint: AssemblyConstraint = {
+        id: createCadId('asm'),
+        type: 'mate',
+        axis: 'z',
+        baseFeatureId: base.id,
+        mateFeatureId: mate.id
+      }
+      this.commitDocumentChange(
+        'feature.updated',
+        mate.id,
+        { before: mate, feature: afterMate, assemblyConstraint: constraint },
+        (draft) => {
+          replaceFeature(draft, afterMate)
+          ensureAssemblies(draft).push(cloneValue(constraint))
+        },
+        normalizeFeatureSelection([base.id, mate.id])
+      )
+    },
+    applyAssemblyDistance(axis: 'x' | 'y' | 'z', distance: number) {
+      if (!this.document || this.selectedFeatures.length < 2 || !Number.isFinite(distance)) return
+      const [target, source] = this.selectedFeatures.map((item) => item.feature)
+      const targetCenter = primitiveCenter(target)
+      const sourceCenter = primitiveCenter(source)
+      if (!targetCenter || !sourceCenter) return
+      const desired = targetCenter[axis] + distance
+      const delta: Point3 = { x: 0, y: 0, z: 0 }
+      delta[axis] = desired - sourceCenter[axis]
+      const afterSource = translateFeature(source, delta)
+      const constraint: AssemblyConstraint = {
+        id: createCadId('asm'),
+        type: 'distance',
+        axis,
+        sourceFeatureId: source.id,
+        targetFeatureId: target.id,
+        distance: roundNumber(distance)
+      }
+      this.commitDocumentChange(
+        'feature.updated',
+        source.id,
+        { before: source, feature: afterSource, assemblyConstraint: constraint },
+        (draft) => {
+          replaceFeature(draft, afterSource)
+          ensureAssemblies(draft).push(cloneValue(constraint))
+        },
+        normalizeFeatureSelection([target.id, source.id])
+      )
+    },
+    toggleSelectedFeatureFixed() {
+      if (!this.document || this.selectedFeatures.length === 0) return
+      const selected = this.selectedFeatures.map((item) => item.feature).filter(isTransformableFeature)
+      if (selected.length === 0) return
+      const shouldLock = selected.some((feature) => !feature.locked)
+      const constraints = selected.map<AssemblyConstraint>((feature) => ({
+        id: createCadId('asm'),
+        type: 'fix',
+        featureId: feature.id
+      }))
+      const before = cloneValue(this.document)
+      const after = cloneValue(this.document)
+      for (const feature of selected) {
+        replaceFeature(after, { ...cloneValue(feature), locked: shouldLock || undefined } as Feature)
+      }
+      if (shouldLock) {
+        ensureAssemblies(after).push(...constraints)
+      } else {
+        const ids = new Set(selected.map((feature) => feature.id))
+        after.assemblies = (after.assemblies ?? []).filter((constraint) => constraint.type !== 'fix' || !ids.has(constraint.featureId))
+      }
+      this.document = after
+      this.selection = normalizeFeatureSelection(selected.map((feature) => feature.id))
+      this.history.push(
+        createSnapshotCommand(before, after, 'feature.updated', 'assembly-fix', {
+          updates: selected.map((feature) => ({
+            before: feature,
+            after: after.features.find((item) => item.id === feature.id)
+          })),
+          assemblies: after.assemblies ?? []
+        })
+      )
+      this.historyRevision += 1
+      this.markDirty()
+      this.broadcastOperation('feature.updated', 'assembly-fix', {
+        updates: selected.flatMap((feature) => {
+          const updated = after.features.find((item) => item.id === feature.id)
+          return updated ? [{ before: feature, after: updated }] : []
+        }),
+        assemblies: after.assemblies ?? []
+      })
     },
     async save(documentId: number, message?: string) {
       if (!this.document) return

@@ -17,23 +17,28 @@ public class CollaborationService {
     private final ProjectPermissionService permissionService;
     private final UserService userService;
     private final OperationLogService operationLogService;
+    private final ConflictService conflictService;
 
     public CollaborationService(
         DocumentService documentService,
         ProjectPermissionService permissionService,
         UserService userService,
-        OperationLogService operationLogService
+        OperationLogService operationLogService,
+        ConflictService conflictService
     ) {
         this.documentService = documentService;
         this.permissionService = permissionService;
         this.userService = userService;
         this.operationLogService = operationLogService;
+        this.conflictService = conflictService;
     }
 
-    public OperationMessage acceptOperation(Long documentId, OperationMessage message, Long userId) {
+    public AcceptedOperation acceptOperation(Long documentId, OperationMessage message, Long userId) {
         DocumentEntity document = documentService.requireDocument(documentId);
         permissionService.requireEditor(document.getProject().getId(), userId);
         UserEntity user = userService.getById(userId);
+        int serverVersion = document.getCurrentVersionNumber();
+        boolean conflict = conflictService.hasConflict(message, serverVersion);
         String operationId = message.operationId() == null || message.operationId().isBlank()
             ? UUID.randomUUID().toString()
             : message.operationId();
@@ -53,9 +58,11 @@ public class CollaborationService {
             message.type(),
             message.targetId(),
             message.baseVersion(),
-            document.getCurrentVersionNumber(),
+            serverVersion,
             message.payload()
         );
-        return accepted;
+        return new AcceptedOperation(accepted, conflict, serverVersion);
     }
+
+    public record AcceptedOperation(OperationMessage operation, boolean conflict, int serverVersion) {}
 }

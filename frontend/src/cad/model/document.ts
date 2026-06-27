@@ -19,6 +19,7 @@ export interface CadDocument {
   }
   sketches: Sketch[]
   features: Feature[]
+  assemblies?: AssemblyConstraint[]
 }
 
 export type SketchPlane = 'XY' | 'XZ' | 'YZ'
@@ -80,13 +81,16 @@ export type SketchConstraint =
   | { id: string; type: 'perpendicular'; entityId: string; targetEntityId: string }
   | { id: string; type: 'tangent'; entityId: string; targetEntityId: string }
 
-export type Feature = ExtrudeFeature | CutFeature | BooleanFeature | BoxFeature | SphereFeature | ConeFeature
+export type Feature = ExtrudeFeature | CutFeature | BooleanFeature | BoxFeature | SphereFeature | ConeFeature | MeshFeature
 
 export interface BaseFeature {
   id: string
   type: string
   name: string
   suppressed: boolean
+  locked?: boolean
+  position?: Point3
+  rotation?: Point3
 }
 
 export interface ExtrudeFeature extends BaseFeature {
@@ -107,14 +111,22 @@ export interface CutFeature extends BaseFeature {
 
 export interface BooleanFeature extends BaseFeature {
   type: 'boolean'
-  operation: 'union' | 'difference'
+  operation: 'add' | 'subtract' | 'union' | 'difference'
   targetFeatureId: string
   toolFeatureId: string
+  resultMesh?: BooleanResultMesh
+}
+
+export interface BooleanResultMesh {
+  vertices: number[]
+  indices?: number[]
+  color?: string
 }
 
 export interface BoxFeature extends BaseFeature {
   type: 'box'
   position: Point3
+  rotation?: Point3
   length: number
   width: number
   height: number
@@ -123,15 +135,31 @@ export interface BoxFeature extends BaseFeature {
 export interface SphereFeature extends BaseFeature {
   type: 'sphere'
   position: Point3
+  rotation?: Point3
   radius: number
 }
 
 export interface ConeFeature extends BaseFeature {
   type: 'cone'
   position: Point3
+  rotation?: Point3
   baseRadius: number
   height: number
 }
+
+export interface MeshFeature extends BaseFeature {
+  type: 'mesh'
+  format: 'stl' | 'gltf' | 'glb' | 'imported'
+  vertices: number[]
+  indices?: number[]
+  color?: string
+}
+
+export type AssemblyConstraint =
+  | { id: string; type: 'fix'; featureId: string }
+  | { id: string; type: 'align'; axis: 'x' | 'y' | 'z' | 'all'; sourceFeatureId: string; targetFeatureId: string }
+  | { id: string; type: 'mate'; axis: 'z'; baseFeatureId: string; mateFeatureId: string }
+  | { id: string; type: 'distance'; axis: 'x' | 'y' | 'z'; sourceFeatureId: string; targetFeatureId: string; distance: number }
 
 export function createEmptyCadDocument(documentId: string, name: string): CadDocument {
   return {
@@ -151,6 +179,7 @@ export function createEmptyCadDocument(documentId: string, name: string): CadDoc
         constraints: []
       }
     ],
-    features: []
+    features: [],
+    assemblies: []
   }
 }

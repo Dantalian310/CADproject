@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -57,16 +58,16 @@ public class DocumentService {
     }
 
     @Transactional
-    public DocumentDTO createDocument(Long projectId, String name, Long userId) {
+    public DocumentDTO createDocument(Long projectId, String name, String description, Long userId) {
         permissionService.requireEditor(projectId, userId);
         UserEntity user = userService.getById(userId);
         ProjectEntity project = requireProject(projectId);
-        return toDTO(createDocumentEntity(project, name, user));
+        return toDTO(createDocumentEntity(project, name, description, user));
     }
 
     @Transactional
     public DocumentDTO createDefaultDocument(ProjectEntity project, UserEntity user) {
-        return toDTO(createDocumentEntity(project, "Demo Part", user));
+        return toDTO(createDocumentEntity(project, "Demo Part", null, user));
     }
 
     @Transactional
@@ -88,6 +89,25 @@ public class DocumentService {
         return toDTO(documentRepository.save(document));
     }
 
+    @Transactional
+    public DocumentDTO updateDocumentMetadata(Long documentId, String name, String description, Long userId) {
+        DocumentEntity document = requireDocument(documentId);
+        permissionService.requireEditor(document.getProject().getId(), userId);
+        UserEntity user = userService.getById(userId);
+        String normalizedName = name == null || name.isBlank() ? document.getName() : name.trim();
+        document.setName(normalizedName);
+        document.setDescription(normalizeDescription(description));
+        document.setUpdatedBy(user);
+        document.setUpdatedAt(Instant.now());
+        Map<String, Object> snapshot = document.getSnapshotJson();
+        if (snapshot != null) {
+            Map<String, Object> nextSnapshot = new LinkedHashMap<>(snapshot);
+            nextSnapshot.put("name", normalizedName);
+            document.setSnapshotJson(nextSnapshot);
+        }
+        return toDTO(documentRepository.save(document));
+    }
+
     public DocumentEntity requireDocument(Long documentId) {
         return documentRepository.findByIdAndDeletedFalse(documentId)
             .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "CAD 文档不存在"));
@@ -98,6 +118,7 @@ public class DocumentService {
             document.getId(),
             document.getProject().getId(),
             document.getName(),
+            document.getDescription(),
             document.getCurrentVersionNumber(),
             document.getSnapshotJson(),
             document.getCreatedAt(),
@@ -111,10 +132,11 @@ public class DocumentService {
             .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "项目不存在"));
     }
 
-    private DocumentEntity createDocumentEntity(ProjectEntity project, String name, UserEntity user) {
+    private DocumentEntity createDocumentEntity(ProjectEntity project, String name, String description, UserEntity user) {
         DocumentEntity document = new DocumentEntity();
         document.setProject(project);
         document.setName(name);
+        document.setDescription(normalizeDescription(description));
         document.setCreatedBy(user);
         document.setUpdatedBy(user);
         document.setCurrentVersionNumber(0);
@@ -169,7 +191,15 @@ public class DocumentService {
                 "entities", List.of(),
                 "constraints", List.of()
             )),
-            "features", List.of()
+            "features", List.of(),
+            "assemblies", List.of()
         );
+    }
+
+    private String normalizeDescription(String description) {
+        if (description == null || description.isBlank()) {
+            return null;
+        }
+        return description.trim();
     }
 }

@@ -4,6 +4,7 @@ import com.cloudcad.common.api.ApiResponse;
 import com.cloudcad.document.dto.CreateDocumentRequest;
 import com.cloudcad.document.dto.DocumentDTO;
 import com.cloudcad.document.dto.SaveDocumentRequest;
+import com.cloudcad.document.dto.UpdateDocumentRequest;
 import com.cloudcad.document.service.DocumentService;
 import com.cloudcad.security.AuthenticatedUser;
 import jakarta.validation.Valid;
@@ -33,7 +34,7 @@ public class DocumentController {
         @Valid @RequestBody CreateDocumentRequest request,
         @AuthenticationPrincipal AuthenticatedUser currentUser
     ) {
-        return ApiResponse.ok(documentService.createDocument(projectId, request.name(), currentUser.id()));
+        return ApiResponse.ok(documentService.createDocument(projectId, request.name(), request.description(), currentUser.id()));
     }
 
     @GetMapping("/api/documents/{documentId}")
@@ -48,6 +49,15 @@ public class DocumentController {
         @AuthenticationPrincipal AuthenticatedUser currentUser
     ) {
         return ApiResponse.ok(documentService.saveDocument(documentId, request.baseVersion(), request.snapshotJson(), request.message(), currentUser.id()));
+    }
+
+    @PutMapping("/api/documents/{documentId}")
+    public ApiResponse<DocumentDTO> updateDocumentMetadata(
+        @PathVariable Long documentId,
+        @Valid @RequestBody UpdateDocumentRequest request,
+        @AuthenticationPrincipal AuthenticatedUser currentUser
+    ) {
+        return ApiResponse.ok(documentService.updateDocumentMetadata(documentId, request.name(), request.description(), currentUser.id()));
     }
 
     @GetMapping("/api/documents/{documentId}/export-json")

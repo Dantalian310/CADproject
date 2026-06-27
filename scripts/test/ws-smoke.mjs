@@ -103,12 +103,20 @@ assert(true, 'STOMP CONNECT succeeds')
 
 ws.send(frame('SUBSCRIBE', { id: 'presence-sub', destination: `/topic/documents/${documentId}/presence` }))
 ws.send(frame('SUBSCRIBE', { id: 'operation-sub', destination: `/topic/documents/${documentId}/operations` }))
+ws.send(frame('SUBSCRIBE', { id: 'cursor-sub', destination: `/topic/documents/${documentId}/cursor` }))
+ws.send(frame('SUBSCRIBE', { id: 'system-sub', destination: `/topic/documents/${documentId}/system` }))
 
 ws.send(frame('SEND', { destination: `/app/documents/${documentId}/join`, 'content-type': 'application/json' }, '{}'))
 const presenceFrame = await waitFor(messages, (item) => item.command === 'MESSAGE' && item.headers.destination?.endsWith('/presence'), 'presence message')
 const presence = JSON.parse(presenceFrame.body)
 assert(presence.type === 'presence.update', 'presence update envelope received')
 assert(Array.isArray(presence.payload.onlineUsers) && presence.payload.onlineUsers.length >= 1, 'presence contains online users')
+
+ws.send(frame('SEND', { destination: `/app/documents/${documentId}/cursor`, 'content-type': 'application/json' }, JSON.stringify({ x: 120, y: 80 })))
+const cursorFrame = await waitFor(messages, (item) => item.command === 'MESSAGE' && item.headers.destination?.endsWith('/cursor'), 'cursor message')
+const cursorEnvelope = JSON.parse(cursorFrame.body)
+assert(cursorEnvelope.type === 'cursor.update', 'cursor update envelope received')
+assert(cursorEnvelope.payload.username === username && cursorEnvelope.payload.x === 120 && cursorEnvelope.payload.y === 80, 'cursor payload broadcasts pointer position')
 
 const operation = {
   operationId: `ws-op-${stamp}`,
@@ -136,6 +144,25 @@ const operationFrame = await waitFor(messages, (item) => item.command === 'MESSA
 const operationEnvelope = JSON.parse(operationFrame.body)
 assert(operationEnvelope.type === 'operation.applied', 'operation envelope received')
 assert(operationEnvelope.payload.operationId === operation.operationId, 'operation payload echoes operation id')
+
+const staleOperation = {
+  ...operation,
+  operationId: `ws-conflict-${stamp}`,
+  targetId: `ws-conflict-rect-${stamp}`,
+  baseVersion: 0,
+  payload: {
+    ...operation.payload,
+    entity: {
+      ...operation.payload.entity,
+      id: `ws-conflict-rect-${stamp}`
+    }
+  }
+}
+ws.send(frame('SEND', { destination: `/app/documents/${documentId}/operations`, 'content-type': 'application/json' }, JSON.stringify(staleOperation)))
+const conflictFrame = await waitFor(messages, (item) => item.command === 'MESSAGE' && item.headers.destination?.endsWith('/system'), 'conflict warning message')
+const conflictEnvelope = JSON.parse(conflictFrame.body)
+assert(conflictEnvelope.type === 'conflict.warning', 'stale operation broadcasts conflict warning')
+assert(Boolean(conflictEnvelope.payload.reason), 'conflict warning includes reason')
 
 ws.send(frame('DISCONNECT', { receipt: 'close-1' }))
 ws.close()

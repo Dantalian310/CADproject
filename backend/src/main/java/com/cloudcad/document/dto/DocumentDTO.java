@@ -7,6 +7,7 @@ public record DocumentDTO(
     Long id,
     Long projectId,
     String name,
+    String description,
     Integer currentVersion,
     Map<String, Object> snapshotJson,
     Instant createdAt,

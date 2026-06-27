@@ -1,8 +1,10 @@
 import * as THREE from 'three'
-import { ADDITION, Brush, DIFFERENCE, Evaluator, SUBTRACTION } from 'three-bvh-csg'
-import type { BoxFeature, CadDocument, CircleEntity, ConeFeature, Feature, Point2, RectangleEntity, SketchEntity, SketchPlane, SphereFeature } from '@/cad/model/document'
+import { ADDITION, Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg'
+import type { BooleanFeature, BooleanResultMesh, BoxFeature, CadDocument, CircleEntity, ConeFeature, Feature, MeshFeature, Point2, RectangleEntity, SketchEntity, SketchPlane, SphereFeature } from '@/cad/model/document'
 import type { GeometryKernel, MeshDescriptor } from './geometryKernel'
 import { sampleArcPoints } from './sketchArcGeometry'
+
+type NormalizedBooleanOperation = 'add' | 'subtract'
 
 export class ThreeGeometryKernel implements GeometryKernel {
   private readonly evaluator = new Evaluator()
@@ -22,7 +24,8 @@ export class ThreeGeometryKernel implements GeometryKernel {
       const sketch = document.sketches.find((item) => item.id === feature.sourceSketchId)
       const entity = sketch?.entities.find((item) => item.id === feature.sourceEntityId)
 
-      return this.buildEntityExtrude(feature.id, entity, feature.depth, '#7c9cbf', sketch?.plane ?? 'XY')
+      const descriptor = this.buildEntityExtrude(feature.id, entity, feature.depth, '#7c9cbf', sketch?.plane ?? 'XY')
+      return descriptor ? this.applyDescriptorTransform(descriptor, feature) : null
     }
     if (feature.type === 'box') {
       return this.buildBoxFeature(feature)
@@ -33,11 +36,32 @@ export class ThreeGeometryKernel implements GeometryKernel {
     if (feature.type === 'cone') {
       return this.buildConeFeature(feature)
     }
+    if (feature.type === 'mesh') {
+      return this.buildMeshFeature(feature)
+    }
 
     return null
   }
 
   private buildFeatureHistory(document: CadDocument): MeshDescriptor[] {
+    const { descriptors, consumed } = this.buildFeatureDescriptorState(document)
+    return [...descriptors.values()].filter((descriptor) => !consumed.has(descriptor.featureId))
+  }
+
+  buildBooleanResultMesh(document: CadDocument, feature: BooleanFeature): BooleanResultMesh | null {
+    const { descriptors } = this.buildFeatureDescriptorState(document)
+    const target = descriptors.get(feature.targetFeatureId)
+    const tool = descriptors.get(feature.toolFeatureId)
+    if (!target || !tool) return null
+
+    const normalizedOperation = this.normalizeBooleanOperation(feature.operation)
+    const operation = normalizedOperation === 'add' ? ADDITION : SUBTRACTION
+    const color = normalizedOperation === 'add' ? '#5b9f75' : '#b86b6b'
+    const result = this.evaluateCsg(feature.id, target, tool, operation, color)
+    return this.serializeGeometry(result.geometry, color)
+  }
+
+  private buildFeatureDescriptorState(document: CadDocument): { descriptors: Map<string, MeshDescriptor>; consumed: Set<string> } {
     const descriptors = new Map<string, MeshDescriptor>()
     const consumed = new Set<string>()
 
@@ -49,7 +73,7 @@ export class ThreeGeometryKernel implements GeometryKernel {
         if (descriptor) descriptors.set(feature.id, descriptor)
       }
 
-      if (feature.type === 'box' || feature.type === 'sphere' || feature.type === 'cone') {
+      if (feature.type === 'box' || feature.type === 'sphere' || feature.type === 'cone' || feature.type === 'mesh') {
         const descriptor = this.buildFeature(feature, document)
         if (descriptor) descriptors.set(feature.id, descriptor)
       }
@@ -60,25 +84,39 @@ export class ThreeGeometryKernel implements GeometryKernel {
         const toolEntity = toolSketch?.entities.find((entity) => entity.id === feature.toolEntityId)
         const tool = this.buildEntityExtrude(`${feature.id}-tool`, toolEntity, feature.depth, '#ef4444', toolSketch?.plane ?? 'XY')
         if (!target || !tool) continue
-        const result = this.evaluateCsg(feature.id, target, tool, SUBTRACTION, '#c08457')
+        const result = this.applyDescriptorTransform(this.evaluateCsg(feature.id, target, tool, SUBTRACTION, '#c08457'), feature)
         descriptors.set(feature.id, result)
         consumed.add(feature.targetFeatureId)
       }
 
       if (feature.type === 'boolean') {
+        const normalizedOperation = this.normalizeBooleanOperation(feature.operation)
+        if (feature.resultMesh?.vertices.length) {
+          const result = this.buildStoredBooleanResult(feature, normalizedOperation === 'add' ? '#5b9f75' : '#b86b6b')
+          if (!result) continue
+          descriptors.set(feature.id, result)
+          consumed.add(feature.targetFeatureId)
+          if (normalizedOperation === 'add') {
+            consumed.add(feature.toolFeatureId)
+          }
+          continue
+        }
+
         const target = descriptors.get(feature.targetFeatureId)
         const tool = descriptors.get(feature.toolFeatureId)
         if (!target || !tool) continue
-        const operation = feature.operation === 'union' ? ADDITION : DIFFERENCE
-        const color = feature.operation === 'union' ? '#5b9f75' : '#b86b6b'
-        const result = this.evaluateCsg(feature.id, target, tool, operation, color)
+        const operation = normalizedOperation === 'add' ? ADDITION : SUBTRACTION
+        const color = normalizedOperation === 'add' ? '#5b9f75' : '#b86b6b'
+        const result = this.applyDescriptorTransform(this.evaluateCsg(feature.id, target, tool, operation, color), feature)
         descriptors.set(feature.id, result)
         consumed.add(feature.targetFeatureId)
-        consumed.add(feature.toolFeatureId)
+        if (normalizedOperation === 'add') {
+          consumed.add(feature.toolFeatureId)
+        }
       }
     }
 
-    return [...descriptors.values()].filter((descriptor) => !consumed.has(descriptor.featureId))
+    return { descriptors, consumed }
   }
 
   private buildSketchEntity(sketchId: string, plane: SketchPlane, entity: SketchEntity): MeshDescriptor {
@@ -203,6 +241,7 @@ export class ThreeGeometryKernel implements GeometryKernel {
   private buildBoxFeature(feature: BoxFeature): MeshDescriptor {
     const geometry = new THREE.BoxGeometry(feature.length, feature.width, feature.height)
     geometry.translate(feature.position.x, feature.position.y, feature.position.z + feature.height / 2)
+    this.applyFeatureRotation(geometry, feature.position, feature.height / 2, feature.rotation)
     return {
       id: `mesh-${feature.id}`,
       featureId: feature.id,
@@ -214,6 +253,7 @@ export class ThreeGeometryKernel implements GeometryKernel {
   private buildSphereFeature(feature: SphereFeature): MeshDescriptor {
     const geometry = new THREE.SphereGeometry(feature.radius, 48, 24)
     geometry.translate(feature.position.x, feature.position.y, feature.position.z + feature.radius)
+    this.applyFeatureRotation(geometry, feature.position, feature.radius, feature.rotation)
     return {
       id: `mesh-${feature.id}`,
       featureId: feature.id,
@@ -226,12 +266,48 @@ export class ThreeGeometryKernel implements GeometryKernel {
     const geometry = new THREE.ConeGeometry(feature.baseRadius, feature.height, 48)
     geometry.rotateX(Math.PI / 2)
     geometry.translate(feature.position.x, feature.position.y, feature.position.z + feature.height / 2)
+    this.applyFeatureRotation(geometry, feature.position, feature.height / 2, feature.rotation)
     return {
       id: `mesh-${feature.id}`,
       featureId: feature.id,
       geometry,
       material: new THREE.MeshStandardMaterial({ color: '#c08457', roughness: 0.58 })
     }
+  }
+
+  private buildMeshFeature(feature: MeshFeature): MeshDescriptor | null {
+    if (feature.vertices.length < 9) return null
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(feature.vertices, 3))
+    if (feature.indices && feature.indices.length >= 3) {
+      geometry.setIndex(feature.indices)
+    }
+    geometry.computeVertexNormals()
+    const descriptor: MeshDescriptor = {
+      id: `mesh-${feature.id}`,
+      featureId: feature.id,
+      geometry,
+      material: new THREE.MeshStandardMaterial({ color: feature.color ?? '#94a3b8', roughness: 0.58 })
+    }
+    return this.applyDescriptorTransform(descriptor, feature)
+  }
+
+  private buildStoredBooleanResult(feature: BooleanFeature, fallbackColor: string): MeshDescriptor | null {
+    const mesh = feature.resultMesh
+    if (!mesh || mesh.vertices.length < 9) return null
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(mesh.vertices, 3))
+    if (mesh.indices && mesh.indices.length >= 3) {
+      geometry.setIndex(mesh.indices)
+    }
+    geometry.computeVertexNormals()
+    const descriptor: MeshDescriptor = {
+      id: `mesh-${feature.id}`,
+      featureId: feature.id,
+      geometry,
+      material: new THREE.MeshStandardMaterial({ color: mesh.color ?? fallbackColor, roughness: 0.58 })
+    }
+    return this.applyDescriptorTransform(descriptor, feature)
   }
 
   private pointToPlaneVector(point: Point2, plane: SketchPlane, normalOffset = 0): THREE.Vector3 {
@@ -242,6 +318,54 @@ export class ThreeGeometryKernel implements GeometryKernel {
       return new THREE.Vector3(normalOffset, point.x, point.y)
     }
     return new THREE.Vector3(point.x, point.y, normalOffset)
+  }
+
+  private applyFeatureRotation(geometry: THREE.BufferGeometry, position: Point2 & { z: number }, centerOffsetZ: number, rotation?: Point2 & { z: number }): void {
+    if (!rotation || (!rotation.x && !rotation.y && !rotation.z)) return
+    const center = new THREE.Vector3(position.x, position.y, position.z + centerOffsetZ)
+    geometry.translate(-center.x, -center.y, -center.z)
+    geometry.rotateX(THREE.MathUtils.degToRad(rotation.x || 0))
+    geometry.rotateY(THREE.MathUtils.degToRad(rotation.y || 0))
+    geometry.rotateZ(THREE.MathUtils.degToRad(rotation.z || 0))
+    geometry.translate(center.x, center.y, center.z)
+  }
+
+  private applyDescriptorTransform(descriptor: MeshDescriptor, feature: Feature): MeshDescriptor {
+    const geometry = descriptor.geometry
+    const position = feature.position ?? { x: 0, y: 0, z: 0 }
+    if (position.x || position.y || position.z) {
+      geometry.translate(position.x, position.y, position.z)
+    }
+
+    const rotation = feature.rotation
+    if (rotation && (rotation.x || rotation.y || rotation.z)) {
+      geometry.computeBoundingBox()
+      const center = new THREE.Vector3()
+      geometry.boundingBox?.getCenter(center)
+      geometry.translate(-center.x, -center.y, -center.z)
+      geometry.rotateX(THREE.MathUtils.degToRad(rotation.x || 0))
+      geometry.rotateY(THREE.MathUtils.degToRad(rotation.y || 0))
+      geometry.rotateZ(THREE.MathUtils.degToRad(rotation.z || 0))
+      geometry.translate(center.x, center.y, center.z)
+    }
+
+    return descriptor
+  }
+
+  private normalizeBooleanOperation(operation: string): NormalizedBooleanOperation {
+    return operation === 'union' || operation === 'add' ? 'add' : 'subtract'
+  }
+
+  private serializeGeometry(geometry: THREE.BufferGeometry, color: string): BooleanResultMesh {
+    const position = geometry.getAttribute('position')
+    const index = geometry.getIndex()
+    const vertices = Array.from(position.array as ArrayLike<number>)
+    const indices = index ? Array.from(index.array as ArrayLike<number>) : undefined
+    return {
+      vertices,
+      ...(indices && indices.length > 0 ? { indices } : {}),
+      color
+    }
   }
 
   private evaluateCsg(

@@ -65,9 +65,19 @@ public class CollaborationMessageController {
     @MessageMapping("/documents/{documentId}/operations")
     public void operation(@DestinationVariable Long documentId, OperationMessage message, Principal principal) {
         AuthenticatedUser user = requireUser(principal);
+        CollaborationService.AcceptedOperation accepted = collaborationService.acceptOperation(documentId, message, user.id());
+        if (accepted.conflict()) {
+            messagingTemplate.convertAndSend(
+                "/topic/documents/" + documentId + "/system",
+                envelope("conflict.warning", Map.of(
+                    "reason", "当前操作基于旧版本，可能与其他成员的修改产生冲突",
+                    "serverVersion", accepted.serverVersion()
+                ))
+            );
+        }
         messagingTemplate.convertAndSend(
             "/topic/documents/" + documentId + "/operations",
-            envelope("operation.applied", collaborationService.acceptOperation(documentId, message, user.id()))
+            envelope("operation.applied", accepted.operation())
         );
     }
 
