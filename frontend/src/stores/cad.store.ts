@@ -1810,9 +1810,19 @@ export const useCadStore = defineStore('cad', {
         payload,
         clientTimestamp: new Date().toISOString()
       }
-      void import('./collaboration.store').then(({ useCollaborationStore }) => {
-        useCollaborationStore().sendOperation(operation)
-      })
+      void import('./collaboration.store')
+        .then(({ useCollaborationStore }) => {
+          try {
+            useCollaborationStore().sendOperation(operation)
+          } catch (error) {
+            useStatusStore().setWebsocketStatus('error')
+            useStatusStore().reportError(error instanceof Error ? error.message : '协同广播失败，当前变更已保留在本地')
+          }
+        })
+        .catch((error) => {
+          useStatusStore().setWebsocketStatus('error')
+          useStatusStore().reportError(error instanceof Error ? error.message : '协同模块加载失败，当前变更已保留在本地')
+        })
     }
   }
 })

@@ -53,6 +53,7 @@ import { useAuthStore } from '@/stores/auth.store'
 import { useCadStore } from '@/stores/cad.store'
 import { useCollaborationStore } from '@/stores/collaboration.store'
 import { useProjectStore } from '@/stores/project.store'
+import { useStatusStore } from '@/stores/status.store'
 import { exportSketchDocumentDxf, exportSketchDocumentSvg } from '@/cad/io/sketchExport'
 import { exportCadDocumentGlb, exportCadDocumentStl } from '@/cad/io/solidExport'
 
@@ -62,6 +63,7 @@ const authStore = useAuthStore()
 const cadStore = useCadStore()
 const projectStore = useProjectStore()
 const collaborationStore = useCollaborationStore()
+const statusStore = useStatusStore()
 const versionVisible = ref(false)
 const viewport = ref<InstanceType<typeof CadViewport> | null>(null)
 const projectId = computed(() => Number(route.params.projectId))
@@ -72,7 +74,13 @@ onMounted(async () => {
   await projectStore.loadProject(projectId.value)
   await cadStore.loadDocument(documentId.value)
   if (authStore.token) {
-    await collaborationStore.connect(documentId.value, authStore.token)
+    try {
+      await collaborationStore.connect(documentId.value, authStore.token)
+    } catch (error) {
+      statusStore.setWebsocketStatus('error')
+      statusStore.reportError(error instanceof Error ? error.message : '协同连接失败，已切换为单人编辑模式')
+      ElMessage.warning('协同连接失败，当前可继续单人编辑')
+    }
   }
 })
 
