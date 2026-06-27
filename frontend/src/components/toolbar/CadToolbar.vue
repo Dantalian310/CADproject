@@ -11,15 +11,15 @@
       </el-select>
     </div>
     <div class="toolbar-group">
-      <el-dropdown trigger="click">
+      <el-dropdown trigger="click" @command="handleViewCommand">
         <el-button size="small">视图</el-button>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item @click="$emit('view', 'top')">俯视</el-dropdown-item>
-            <el-dropdown-item @click="$emit('view', 'front')">正视</el-dropdown-item>
-            <el-dropdown-item @click="$emit('view', 'right')">右视</el-dropdown-item>
-            <el-dropdown-item @click="$emit('view', 'isometric')">等轴</el-dropdown-item>
-            <el-dropdown-item @click="$emit('view', 'fit')">全图</el-dropdown-item>
+            <el-dropdown-item command="top">俯视</el-dropdown-item>
+            <el-dropdown-item command="front">正视</el-dropdown-item>
+            <el-dropdown-item command="right">右视</el-dropdown-item>
+            <el-dropdown-item command="isometric">等轴</el-dropdown-item>
+            <el-dropdown-item command="fit">全图</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
@@ -46,93 +46,93 @@
       </el-select>
     </div>
     <div class="toolbar-group">
-      <el-checkbox v-model="constructionModeModel" size="small" :disabled="readonly">构造</el-checkbox>
-      <el-dropdown trigger="click" :disabled="readonly">
-        <el-button size="small" :disabled="readonly">草图</el-button>
+      <el-checkbox v-model="constructionModeModel" size="small" :disabled="!canEdit">构造</el-checkbox>
+      <el-dropdown trigger="click" :disabled="!canEdit" @command="handleToolCommand">
+        <el-button size="small" :disabled="!canEdit">草图</el-button>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item @click="setTool('line')">线段</el-dropdown-item>
-            <el-dropdown-item @click="setTool('rectangle')">矩形</el-dropdown-item>
-            <el-dropdown-item @click="setTool('circle')">圆</el-dropdown-item>
-            <el-dropdown-item @click="setTool('arc')">圆弧</el-dropdown-item>
+            <el-dropdown-item command="line">线段</el-dropdown-item>
+            <el-dropdown-item command="rectangle">矩形</el-dropdown-item>
+            <el-dropdown-item command="circle">圆</el-dropdown-item>
+            <el-dropdown-item command="arc">圆弧</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
-      <el-dropdown trigger="click" :disabled="readonly">
-        <el-button size="small" :disabled="readonly">约束</el-button>
+      <el-dropdown trigger="click" :disabled="!canEdit" @command="handleToolCommand">
+        <el-button size="small" :disabled="!canEdit">约束</el-button>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item @click="setTool('fixed')">固定</el-dropdown-item>
-            <el-dropdown-item @click="setTool('horizontal')">水平</el-dropdown-item>
-            <el-dropdown-item @click="setTool('vertical')">垂直</el-dropdown-item>
-            <el-dropdown-item @click="setTool('dimension')">尺寸</el-dropdown-item>
-            <el-dropdown-item divided @click="setTool('concentric')">同心</el-dropdown-item>
-            <el-dropdown-item @click="setTool('equalRadius')">等半径</el-dropdown-item>
-            <el-dropdown-item @click="setTool('parallel')">平行</el-dropdown-item>
-            <el-dropdown-item @click="setTool('perpendicular')">垂直关系</el-dropdown-item>
-            <el-dropdown-item @click="setTool('tangent')">相切</el-dropdown-item>
+            <el-dropdown-item command="fixed">固定</el-dropdown-item>
+            <el-dropdown-item command="horizontal">水平</el-dropdown-item>
+            <el-dropdown-item command="vertical">垂直</el-dropdown-item>
+            <el-dropdown-item command="dimension">尺寸</el-dropdown-item>
+            <el-dropdown-item divided command="concentric">同心</el-dropdown-item>
+            <el-dropdown-item command="equalRadius">等半径</el-dropdown-item>
+            <el-dropdown-item command="parallel">平行</el-dropdown-item>
+            <el-dropdown-item command="perpendicular">垂直关系</el-dropdown-item>
+            <el-dropdown-item command="tangent">相切</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
-      <el-dropdown trigger="click" :disabled="readonly">
-        <el-button size="small" :disabled="readonly">实体</el-button>
+      <el-dropdown trigger="click" :disabled="!canEdit" @command="handleSolidCommand">
+        <el-button size="small" :disabled="!canEdit">实体</el-button>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item @click="openBoxDialog">立方体</el-dropdown-item>
-            <el-dropdown-item @click="openSphereDialog">球体</el-dropdown-item>
-            <el-dropdown-item @click="openConeDialog">锥体</el-dropdown-item>
-            <el-dropdown-item divided @click="setTool('extrude')">拉伸</el-dropdown-item>
-            <el-dropdown-item :disabled="!canOpenCutDialog" @click="openCutDialog">切除</el-dropdown-item>
+            <el-dropdown-item command="box">立方体</el-dropdown-item>
+            <el-dropdown-item command="sphere">球体</el-dropdown-item>
+            <el-dropdown-item command="cone">锥体</el-dropdown-item>
+            <el-dropdown-item divided command="extrude">拉伸</el-dropdown-item>
+            <el-dropdown-item command="cutDialog" :disabled="!canOpenCutDialog">切除</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
-      <el-dropdown trigger="click" :disabled="readonly">
-        <el-button size="small" :disabled="readonly">布尔</el-button>
+      <el-dropdown trigger="click" :disabled="!canEdit" @command="handleBooleanCommand">
+        <el-button size="small" :disabled="!canEdit">布尔</el-button>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item :disabled="!canRunBoolean" @click="setTool('booleanAdd')">布尔加</el-dropdown-item>
-            <el-dropdown-item :disabled="!canOpenBooleanSubtractDialog" @click="openBooleanSubtractDialog">布尔减</el-dropdown-item>
+            <el-dropdown-item command="booleanAdd" :disabled="!canRunBoolean">布尔加</el-dropdown-item>
+            <el-dropdown-item command="booleanSubtractDialog" :disabled="!canOpenBooleanSubtractDialog">布尔减</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
-      <el-dropdown trigger="click" :disabled="readonly">
-        <el-button size="small" :disabled="readonly">装配</el-button>
+      <el-dropdown trigger="click" :disabled="!canEdit" @command="handleAssemblyCommand">
+        <el-button size="small" :disabled="!canEdit">装配</el-button>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item :disabled="!canRunAssembly" @click="cadStore.applyAssemblyAlign('all')">中心重合</el-dropdown-item>
-            <el-dropdown-item :disabled="!canRunAssembly" @click="cadStore.applyAssemblyAlign('x')">X 中心对齐</el-dropdown-item>
-            <el-dropdown-item :disabled="!canRunAssembly" @click="cadStore.applyAssemblyAlign('y')">Y 中心对齐</el-dropdown-item>
-            <el-dropdown-item :disabled="!canRunAssembly" @click="cadStore.applyAssemblyAlign('z')">Z 中心对齐</el-dropdown-item>
-            <el-dropdown-item divided :disabled="!canRunAssembly" @click="cadStore.applyAssemblyMateZ()">Z 面贴合</el-dropdown-item>
-            <el-dropdown-item :disabled="!canRunAssembly" @click="openAssemblyDistanceDialog">轴向距离</el-dropdown-item>
-            <el-dropdown-item divided :disabled="!cadStore.hasFeatureSelection" @click="cadStore.toggleSelectedFeatureFixed()">固定/解除固定</el-dropdown-item>
+            <el-dropdown-item command="align-all" :disabled="!canRunAssembly">中心重合</el-dropdown-item>
+            <el-dropdown-item command="align-x" :disabled="!canRunAssembly">X 中心对齐</el-dropdown-item>
+            <el-dropdown-item command="align-y" :disabled="!canRunAssembly">Y 中心对齐</el-dropdown-item>
+            <el-dropdown-item command="align-z" :disabled="!canRunAssembly">Z 中心对齐</el-dropdown-item>
+            <el-dropdown-item divided command="mate-z" :disabled="!canRunAssembly">Z 面贴合</el-dropdown-item>
+            <el-dropdown-item command="assembly-distance" :disabled="!canRunAssembly">轴向距离</el-dropdown-item>
+            <el-dropdown-item divided command="toggle-fixed" :disabled="!cadStore.hasFeatureSelection">固定/解除固定</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
-      <el-dropdown trigger="click" :disabled="readonly">
-        <el-button size="small" :disabled="readonly">编辑</el-button>
+      <el-dropdown trigger="click" :disabled="!canEdit" @command="handleEditCommand">
+        <el-button size="small" :disabled="!canEdit">编辑</el-button>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item :disabled="!cadStore.hasSketchEntitySelection" @click="cadStore.duplicateSelection()">复制</el-dropdown-item>
-            <el-dropdown-item :disabled="!cadStore.hasSketchEntitySelection" @click="cadStore.toggleSelectionConstruction()">构造切换</el-dropdown-item>
-            <el-dropdown-item :disabled="!cadStore.hasSketchEntitySelection" @click="openRotateDialog">旋转</el-dropdown-item>
-            <el-dropdown-item :disabled="!canRotateFeatures" @click="openFeatureRotateDialog">三维旋转</el-dropdown-item>
-            <el-dropdown-item :disabled="!cadStore.hasSketchEntitySelection" @click="cadStore.mirrorSelection('horizontal')">水平镜像</el-dropdown-item>
-            <el-dropdown-item :disabled="!cadStore.hasSketchEntitySelection" @click="cadStore.mirrorSelection('vertical')">垂直镜像</el-dropdown-item>
-            <el-dropdown-item :disabled="cadStore.selectedSketchEntities.length < 2" @click="cadStore.mirrorSelectionByLine()">按线镜像</el-dropdown-item>
-            <el-dropdown-item :disabled="!cadStore.hasSketchEntitySelection" @click="openArrayDialog">阵列</el-dropdown-item>
-            <el-dropdown-item :disabled="!cadStore.hasSketchEntitySelection" @click="openOffsetDialog">偏移</el-dropdown-item>
-            <el-dropdown-item :disabled="!canModifyLineCorner" @click="openFilletDialog">圆角</el-dropdown-item>
-            <el-dropdown-item :disabled="!canModifyLineCorner" @click="openChamferDialog">倒角</el-dropdown-item>
-            <el-dropdown-item divided :disabled="!cadStore.selection" @click="cadStore.deleteSelection()">删除</el-dropdown-item>
+            <el-dropdown-item command="duplicate" :disabled="!cadStore.hasSketchEntitySelection">复制</el-dropdown-item>
+            <el-dropdown-item command="construction" :disabled="!cadStore.hasSketchEntitySelection">构造切换</el-dropdown-item>
+            <el-dropdown-item command="rotate-sketch" :disabled="!cadStore.hasSketchEntitySelection">旋转</el-dropdown-item>
+            <el-dropdown-item command="rotate-feature" :disabled="!canRotateFeatures">三维旋转</el-dropdown-item>
+            <el-dropdown-item command="mirror-horizontal" :disabled="!cadStore.hasSketchEntitySelection">水平镜像</el-dropdown-item>
+            <el-dropdown-item command="mirror-vertical" :disabled="!cadStore.hasSketchEntitySelection">垂直镜像</el-dropdown-item>
+            <el-dropdown-item command="mirror-line" :disabled="cadStore.selectedSketchEntities.length < 2">按线镜像</el-dropdown-item>
+            <el-dropdown-item command="array" :disabled="!cadStore.hasSketchEntitySelection">阵列</el-dropdown-item>
+            <el-dropdown-item command="offset" :disabled="!cadStore.hasSketchEntitySelection">偏移</el-dropdown-item>
+            <el-dropdown-item command="fillet" :disabled="!canModifyLineCorner">圆角</el-dropdown-item>
+            <el-dropdown-item command="chamfer" :disabled="!canModifyLineCorner">倒角</el-dropdown-item>
+            <el-dropdown-item divided command="delete" :disabled="!cadStore.selection">删除</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
-      <el-button size="small" :disabled="readonly || !cadStore.canUndo" @click="cadStore.undo()">撤销</el-button>
-      <el-button size="small" :disabled="readonly || !cadStore.canRedo" @click="cadStore.redo()">重做</el-button>
+      <el-button size="small" :disabled="!canEdit || !cadStore.canUndo" @click="cadStore.undo()">撤销</el-button>
+      <el-button size="small" :disabled="!canEdit || !cadStore.canRedo" @click="cadStore.redo()">重做</el-button>
     </div>
     <div class="toolbar-group">
-      <el-button size="small" type="primary" :disabled="readonly" @click="$emit('save')">保存</el-button>
+      <el-button size="small" type="primary" :disabled="!canEdit" @click="$emit('save')">保存</el-button>
       <el-button size="small" @click="$emit('versions')">版本</el-button>
       <el-button size="small" @click="$emit('export-svg')">SVG</el-button>
       <el-button size="small" @click="$emit('export-dxf')">DXF</el-button>
@@ -376,6 +376,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useCadStore, type CadToolType } from '@/stores/cad.store'
 import { sketchAngleStepOptions, sketchGridSizeOptions } from '@/cad/geometry/sketchSnapSettings'
 import { createLineChamfer, createLineFillet } from '@/cad/geometry/sketchCornerOperations'
@@ -388,7 +389,7 @@ import {
 import type { ProjectRole } from '@/api/types'
 
 const props = defineProps<{ role?: ProjectRole }>()
-defineEmits<{
+const emit = defineEmits<{
   save: []
   versions: []
   'export-svg': []
@@ -399,6 +400,7 @@ defineEmits<{
 }>()
 const cadStore = useCadStore()
 const readonly = computed(() => props.role === 'VIEWER')
+const canEdit = computed(() => !readonly.value && Boolean(cadStore.document))
 const boxDialogVisible = ref(false)
 const sphereDialogVisible = ref(false)
 const coneDialogVisible = ref(false)
@@ -488,6 +490,40 @@ const canOpenBooleanSubtractDialog = computed(() => booleanFeatureOptions.value.
 const canRunAssembly = computed(() => cadStore.selectedFeatures.length >= 2)
 const canRotateFeatures = computed(() => cadStore.selectedFeatures.some((item) => !item.feature.locked && !item.feature.suppressed))
 
+type ViewCommand = 'top' | 'front' | 'right' | 'isometric' | 'fit'
+type SolidCommand = 'box' | 'sphere' | 'cone' | 'extrude' | 'cutDialog'
+type BooleanCommand = 'booleanAdd' | 'booleanSubtractDialog'
+type AssemblyCommand = 'align-all' | 'align-x' | 'align-y' | 'align-z' | 'mate-z' | 'assembly-distance' | 'toggle-fixed'
+type EditCommand =
+  | 'duplicate'
+  | 'construction'
+  | 'rotate-sketch'
+  | 'rotate-feature'
+  | 'mirror-horizontal'
+  | 'mirror-vertical'
+  | 'mirror-line'
+  | 'array'
+  | 'offset'
+  | 'fillet'
+  | 'chamfer'
+  | 'delete'
+
+function isStringCommand(command: string | number | object): command is string {
+  return typeof command === 'string'
+}
+
+function ensureCanEdit(): boolean {
+  if (readonly.value) {
+    ElMessage.warning('当前项目是只读权限，不能编辑模型')
+    return false
+  }
+  if (!cadStore.document) {
+    ElMessage.warning('模型文档尚未加载完成，请稍后再试')
+    return false
+  }
+  return true
+}
+
 function selectedLinePair(): [LineEntity, LineEntity] | null {
   if (cadStore.selectedSketchEntities.length !== 2) return null
   const [first, second] = cadStore.selectedSketchEntities
@@ -497,7 +533,66 @@ function selectedLinePair(): [LineEntity, LineEntity] | null {
 }
 
 function setTool(tool: CadToolType) {
+  if (tool !== 'select' && !ensureCanEdit()) return
   cadStore.setActiveTool(tool)
+}
+
+function handleViewCommand(command: string | number | object) {
+  if (!isStringCommand(command)) return
+  if (command === 'top' || command === 'front' || command === 'right' || command === 'isometric' || command === 'fit') {
+    emit('view', command as ViewCommand)
+  }
+}
+
+function handleToolCommand(command: string | number | object) {
+  if (!isStringCommand(command)) return
+  setTool(command as CadToolType)
+}
+
+function handleSolidCommand(command: string | number | object) {
+  if (!isStringCommand(command) || !ensureCanEdit()) return
+  const solidCommand = command as SolidCommand
+  if (solidCommand === 'box') openBoxDialog()
+  if (solidCommand === 'sphere') openSphereDialog()
+  if (solidCommand === 'cone') openConeDialog()
+  if (solidCommand === 'extrude') setTool('extrude')
+  if (solidCommand === 'cutDialog') openCutDialog()
+}
+
+function handleBooleanCommand(command: string | number | object) {
+  if (!isStringCommand(command) || !ensureCanEdit()) return
+  const booleanCommand = command as BooleanCommand
+  if (booleanCommand === 'booleanAdd') setTool('booleanAdd')
+  if (booleanCommand === 'booleanSubtractDialog') openBooleanSubtractDialog()
+}
+
+function handleAssemblyCommand(command: string | number | object) {
+  if (!isStringCommand(command) || !ensureCanEdit()) return
+  const assemblyCommand = command as AssemblyCommand
+  if (assemblyCommand === 'align-all') cadStore.applyAssemblyAlign('all')
+  if (assemblyCommand === 'align-x') cadStore.applyAssemblyAlign('x')
+  if (assemblyCommand === 'align-y') cadStore.applyAssemblyAlign('y')
+  if (assemblyCommand === 'align-z') cadStore.applyAssemblyAlign('z')
+  if (assemblyCommand === 'mate-z') cadStore.applyAssemblyMateZ()
+  if (assemblyCommand === 'assembly-distance') openAssemblyDistanceDialog()
+  if (assemblyCommand === 'toggle-fixed') cadStore.toggleSelectedFeatureFixed()
+}
+
+function handleEditCommand(command: string | number | object) {
+  if (!isStringCommand(command) || !ensureCanEdit()) return
+  const editCommand = command as EditCommand
+  if (editCommand === 'duplicate') cadStore.duplicateSelection()
+  if (editCommand === 'construction') cadStore.toggleSelectionConstruction()
+  if (editCommand === 'rotate-sketch') openRotateDialog()
+  if (editCommand === 'rotate-feature') openFeatureRotateDialog()
+  if (editCommand === 'mirror-horizontal') cadStore.mirrorSelection('horizontal')
+  if (editCommand === 'mirror-vertical') cadStore.mirrorSelection('vertical')
+  if (editCommand === 'mirror-line') cadStore.mirrorSelectionByLine()
+  if (editCommand === 'array') openArrayDialog()
+  if (editCommand === 'offset') openOffsetDialog()
+  if (editCommand === 'fillet') openFilletDialog()
+  if (editCommand === 'chamfer') openChamferDialog()
+  if (editCommand === 'delete') cadStore.deleteSelection()
 }
 
 function active(tool: CadToolType) {
@@ -505,28 +600,34 @@ function active(tool: CadToolType) {
 }
 
 function openBoxDialog() {
+  if (!ensureCanEdit()) return
   boxDialogVisible.value = true
 }
 
 function applyBox() {
+  if (!ensureCanEdit()) return
   cadStore.addBoxPrimitive(boxLength.value, boxWidth.value, boxHeight.value)
   boxDialogVisible.value = false
 }
 
 function openSphereDialog() {
+  if (!ensureCanEdit()) return
   sphereDialogVisible.value = true
 }
 
 function applySphere() {
+  if (!ensureCanEdit()) return
   cadStore.addSpherePrimitive(sphereRadius.value)
   sphereDialogVisible.value = false
 }
 
 function openConeDialog() {
+  if (!ensureCanEdit()) return
   coneDialogVisible.value = true
 }
 
 function applyCone() {
+  if (!ensureCanEdit()) return
   cadStore.addConePrimitive(coneBaseRadius.value, coneHeight.value)
   coneDialogVisible.value = false
 }
