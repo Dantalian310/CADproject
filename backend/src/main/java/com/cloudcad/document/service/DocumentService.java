@@ -90,6 +90,18 @@ public class DocumentService {
     }
 
     @Transactional
+    public void updateLiveSnapshot(Long documentId, Map<String, Object> snapshotJson, Long userId) {
+        DocumentEntity document = requireDocument(documentId);
+        permissionService.requireEditor(document.getProject().getId(), userId);
+        validateSnapshot(snapshotJson);
+        UserEntity user = userService.getById(userId);
+        document.setSnapshotJson(snapshotJson);
+        document.setUpdatedBy(user);
+        document.setUpdatedAt(Instant.now());
+        documentRepository.save(document);
+    }
+
+    @Transactional
     public DocumentDTO updateDocumentMetadata(Long documentId, String name, String description, Long userId) {
         DocumentEntity document = requireDocument(documentId);
         permissionService.requireEditor(document.getProject().getId(), userId);

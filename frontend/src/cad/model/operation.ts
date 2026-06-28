@@ -22,6 +22,10 @@ export interface CadOperation {
   type: CadOperationType
   targetId: string
   baseVersion: number
+  clientId?: string
+  clientRevision?: number
+  serverRevision?: number
+  authorUserId?: number | string
   payload: Record<string, unknown>
   clientTimestamp: string
 }

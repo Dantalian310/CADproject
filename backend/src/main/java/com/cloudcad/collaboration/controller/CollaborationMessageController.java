@@ -70,8 +70,12 @@ public class CollaborationMessageController {
             messagingTemplate.convertAndSend(
                 "/topic/documents/" + documentId + "/system",
                 envelope("conflict.warning", Map.of(
-                    "reason", "当前操作基于旧版本，可能与其他成员的修改产生冲突",
-                    "serverVersion", accepted.serverVersion()
+                    "reason", conflictReason(accepted),
+                    "serverVersion", accepted.serverVersion(),
+                    "serverRevision", accepted.revision().serverRevision(),
+                    "clientRevision", accepted.operation().clientRevision() == null ? -1 : accepted.operation().clientRevision(),
+                    "targetId", accepted.operation().targetId() == null ? "" : accepted.operation().targetId(),
+                    "operationType", accepted.operation().type() == null ? "" : accepted.operation().type()
                 ))
             );
         }
@@ -86,6 +90,16 @@ public class CollaborationMessageController {
             return authenticatedUser;
         }
         throw new IllegalStateException("WebSocket user is not authenticated");
+    }
+
+    private String conflictReason(CollaborationService.AcceptedOperation accepted) {
+        if (accepted.revision().targetConflict()) {
+            return "该对象刚刚被其他成员修改，系统已同步最新模型，请确认后继续编辑";
+        }
+        if (accepted.revision().revisionConflict()) {
+            return "当前操作基于较旧的协同状态，系统已按服务器接收顺序同步，请检查模型变化";
+        }
+        return "当前操作基于旧版本，可能与其他成员的修改产生冲突";
     }
 
     private Map<String, Object> envelope(String type, Object payload) {

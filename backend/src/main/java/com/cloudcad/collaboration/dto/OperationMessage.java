@@ -9,6 +9,10 @@ public record OperationMessage(
     String type,
     String targetId,
     Integer baseVersion,
+    String clientId,
+    Long clientRevision,
+    Long serverRevision,
+    Long authorUserId,
     Map<String, Object> payload,
     Instant clientTimestamp
 ) {

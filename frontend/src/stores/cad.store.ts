@@ -646,6 +646,12 @@ export const useCadStore = defineStore('cad', {
       this.historyRevision += 1
       useStatusStore().setSaveStatus('saved')
     },
+    applyRealtimeSnapshot(snapshot: CadDocument) {
+      this.document = freezeBooleanSubtractFeatures(cloneValue(snapshot))
+      this.document.assemblies = this.document.assemblies ?? []
+      this.historyRevision += 1
+      this.markDirty()
+    },
     setConstructionMode(value: boolean) {
       this.constructionMode = value
     },
@@ -1807,7 +1813,10 @@ export const useCadStore = defineStore('cad', {
         type,
         targetId,
         baseVersion: this.currentVersion,
-        payload,
+        payload: {
+          ...payload,
+          documentSnapshot: cloneValue(this.document)
+        },
         clientTimestamp: new Date().toISOString()
       }
       void import('./collaboration.store')

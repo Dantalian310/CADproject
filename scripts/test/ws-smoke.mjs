@@ -124,6 +124,8 @@ const operation = {
   type: 'sketch.entity.created',
   targetId: `ws-rect-${stamp}`,
   baseVersion: 1,
+  clientId: `ws-client-${stamp}`,
+  clientRevision: 0,
   payload: {
     sketchId: 'sketch-001',
     entity: {
@@ -134,6 +136,30 @@ const operation = {
       origin: { x: 10, y: 10 },
       width: 20,
       height: 15
+    },
+    documentSnapshot: {
+      schemaVersion: '1.0',
+      documentId: String(documentId),
+      name: `WS Smoke Project ${stamp}`,
+      unit: 'mm',
+      metadata: { currentVersion: 1 },
+      sketches: [{
+        id: 'sketch-001',
+        name: 'Sketch 1',
+        plane: 'XY',
+        entities: [{
+          id: `ws-rect-${stamp}`,
+          type: 'rectangle',
+          name: 'WS Rectangle',
+          visible: true,
+          origin: { x: 10, y: 10 },
+          width: 20,
+          height: 15
+        }],
+        constraints: []
+      }],
+      features: [],
+      assemblies: []
     }
   },
   clientTimestamp: new Date().toISOString()
@@ -144,11 +170,18 @@ const operationFrame = await waitFor(messages, (item) => item.command === 'MESSA
 const operationEnvelope = JSON.parse(operationFrame.body)
 assert(operationEnvelope.type === 'operation.applied', 'operation envelope received')
 assert(operationEnvelope.payload.operationId === operation.operationId, 'operation payload echoes operation id')
+assert(operationEnvelope.payload.clientId === operation.clientId, 'operation payload echoes realtime client id')
+assert(operationEnvelope.payload.serverRevision >= 1, 'operation payload includes realtime server revision')
+
+const liveDocument = await api('GET', `/api/documents/${documentId}`, undefined, token)
+const liveEntities = liveDocument.snapshotJson.sketches.flatMap((sketch) => sketch.entities)
+assert(liveEntities.some((entity) => entity.id === operation.targetId), 'operation documentSnapshot updates live document snapshot')
 
 const staleOperation = {
   ...operation,
   operationId: `ws-conflict-${stamp}`,
   targetId: `ws-conflict-rect-${stamp}`,
+  clientRevision: 0,
   baseVersion: 0,
   payload: {
     ...operation.payload,
