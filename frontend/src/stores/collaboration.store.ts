@@ -68,18 +68,20 @@ export const useCollaborationStore = defineStore('collaboration', {
           }
           if (impactsSelection) {
             this.lastConflict = '其他成员刚刚修改了你当前选中的对象，系统已同步最新模型'
-            statusStore.reportError(this.lastConflict)
+            statusStore.reportWarning(this.lastConflict, 7000)
           }
         },
         onSystem: (message) => {
           if (message.type === 'conflict.warning') {
+            const clientId = message.payload?.clientId
+            if (typeof clientId === 'string' && clientId && clientId !== this.clientId) return
             const reason = message.payload?.reason
             this.lastConflict = typeof reason === 'string' ? reason : '检测到协同冲突'
             const serverRevision = message.payload?.serverRevision
             if (typeof serverRevision === 'number') {
               this.collaborationRevision = Math.max(this.collaborationRevision, serverRevision)
             }
-            statusStore.reportError(this.lastConflict)
+            statusStore.reportWarning(this.lastConflict, 7000)
           }
         }
       })

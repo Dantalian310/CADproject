@@ -20,6 +20,7 @@ public class CollaborationService {
     private final OperationLogService operationLogService;
     private final ConflictService conflictService;
     private final CollaborationRevisionService revisionService;
+    private final PresenceService presenceService;
 
     public CollaborationService(
         DocumentService documentService,
@@ -27,7 +28,8 @@ public class CollaborationService {
         UserService userService,
         OperationLogService operationLogService,
         ConflictService conflictService,
-        CollaborationRevisionService revisionService
+        CollaborationRevisionService revisionService,
+        PresenceService presenceService
     ) {
         this.documentService = documentService;
         this.permissionService = permissionService;
@@ -35,6 +37,7 @@ public class CollaborationService {
         this.operationLogService = operationLogService;
         this.conflictService = conflictService;
         this.revisionService = revisionService;
+        this.presenceService = presenceService;
     }
 
     public AcceptedOperation acceptOperation(Long documentId, OperationMessage message, Long userId) {
@@ -51,7 +54,7 @@ public class CollaborationService {
         );
         persistRealtimeSnapshot(documentId, message.payload(), userId);
         boolean conflict = conflictService.hasConflict(message, serverVersion)
-            || revision.revisionConflict()
+            || (presenceService.hasOtherOnlineUsers(documentId, userId) && revision.revisionConflict())
             || revision.targetConflict();
         String operationId = message.operationId() == null || message.operationId().isBlank()
             ? UUID.randomUUID().toString()

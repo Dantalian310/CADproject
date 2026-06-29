@@ -82,6 +82,11 @@ public class PresenceService {
         return new PresenceMessage(List.copyOf(uniqueUsers.values()));
     }
 
+    public boolean hasOtherOnlineUsers(Long documentId, Long currentUserId) {
+        Map<String, PresenceMessage.OnlineUserDTO> room = rooms.getOrDefault(documentId, Map.of());
+        return room.values().stream().anyMatch(user -> !user.id().equals(currentUserId));
+    }
+
     private String colorForUser(Long userId) {
         List<String> colors = List.of("#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed", "#0891b2");
         return colors.get(Math.floorMod(userId.hashCode(), colors.size()));

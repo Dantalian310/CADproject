@@ -58,6 +58,10 @@ async function waitFor(messages, predicate, label, timeoutMs = 10000) {
   throw new Error(`Timed out waiting for ${label}`)
 }
 
+async function delay(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '')
 const username = `wsowner${stamp}`
 
@@ -176,6 +180,27 @@ assert(operationEnvelope.payload.serverRevision >= 1, 'operation payload include
 const liveDocument = await api('GET', `/api/documents/${documentId}`, undefined, token)
 const liveEntities = liveDocument.snapshotJson.sketches.flatMap((sketch) => sketch.entities)
 assert(liveEntities.some((entity) => entity.id === operation.targetId), 'operation documentSnapshot updates live document snapshot')
+
+const systemMessageCountBeforeSoloOperation = messages.filter((item) => item.command === 'MESSAGE' && item.headers.destination?.endsWith('/system')).length
+const soloFollowUpOperation = {
+  ...operation,
+  operationId: `ws-solo-follow-${stamp}`,
+  targetId: `ws-solo-follow-${stamp}`,
+  baseVersion: 1,
+  clientRevision: 0,
+  payload: {
+    ...operation.payload,
+    entity: {
+      ...operation.payload.entity,
+      id: `ws-solo-follow-${stamp}`
+    }
+  }
+}
+ws.send(frame('SEND', { destination: `/app/documents/${documentId}/operations`, 'content-type': 'application/json' }, JSON.stringify(soloFollowUpOperation)))
+await waitFor(messages, (item) => item.command === 'MESSAGE' && item.headers.destination?.endsWith('/operations') && JSON.parse(item.body).payload.operationId === soloFollowUpOperation.operationId, 'solo follow-up operation message')
+await delay(600)
+const systemMessageCountAfterSoloOperation = messages.filter((item) => item.command === 'MESSAGE' && item.headers.destination?.endsWith('/system')).length
+assert(systemMessageCountAfterSoloOperation === systemMessageCountBeforeSoloOperation, 'single-user stale collaboration revision does not broadcast conflict warning')
 
 const staleOperation = {
   ...operation,

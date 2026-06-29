@@ -74,6 +74,8 @@ public class CollaborationMessageController {
                     "serverVersion", accepted.serverVersion(),
                     "serverRevision", accepted.revision().serverRevision(),
                     "clientRevision", accepted.operation().clientRevision() == null ? -1 : accepted.operation().clientRevision(),
+                    "clientId", accepted.operation().clientId() == null ? "" : accepted.operation().clientId(),
+                    "authorUserId", accepted.operation().authorUserId() == null ? -1 : accepted.operation().authorUserId(),
                     "targetId", accepted.operation().targetId() == null ? "" : accepted.operation().targetId(),
                     "operationType", accepted.operation().type() == null ? "" : accepted.operation().type()
                 ))
